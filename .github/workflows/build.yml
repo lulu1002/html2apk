@@ -23,4 +23,3 @@ jobs:
         with:
           name: Html2apk
           path: app/build/outputs/apk/debug/*.apk
-bug/*.apk
