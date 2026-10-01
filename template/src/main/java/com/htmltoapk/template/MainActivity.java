@@ -28,6 +28,7 @@ public class MainActivity extends Activity {
     private WebChromeClient.CustomViewCallback customCb;
     private ValueCallback<Uri[]> fileCb;
     private boolean fullscreen = false;
+    private String siteUrl = "";
 
     private final WebChromeClient chrome = new WebChromeClient() {
         @Override
@@ -72,6 +73,7 @@ public class MainActivity extends Activity {
             JSONObject j = new JSONObject(readAll(is));
             fullscreen = j.optBoolean("fullscreen", false);
             orientation = j.optString("orientation", "auto");
+            siteUrl = j.optString("url", "").trim();
         } catch (Exception ignored) { }
 
         if ("portrait".equals(orientation)) {
@@ -93,10 +95,12 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setAllowFileAccess(true);
+        boolean remote = !siteUrl.isEmpty();
         s.setAllowContentAccess(true);
-        s.setAllowFileAccessFromFileURLs(true);
-        s.setAllowUniversalAccessFromFileURLs(true);
+        // Acesso a file:// só no modo local (HTML/ZIP); no modo URL fica desligado por segurança
+        s.setAllowFileAccess(!remote);
+        s.setAllowFileAccessFromFileURLs(!remote);
+        s.setAllowUniversalAccessFromFileURLs(!remote);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setLoadWithOverviewMode(true);
@@ -123,12 +127,27 @@ public class MainActivity extends Activity {
                 }
                 return false;
             }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest req,
+                                        android.webkit.WebResourceError err) {
+                if (req.isForMainFrame() && !siteUrl.isEmpty()) {
+                    String safe = siteUrl.replace("\"", "").replace("'", "");
+                    view.loadDataWithBaseURL(null,
+                            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                                    + "<body style='font-family:sans-serif;text-align:center;padding:40px'>"
+                                    + "<h3>Não foi possível carregar o site</h3>"
+                                    + "<p>Verifique a conexão e tente novamente.</p>"
+                                    + "<button onclick=\"location.href='" + safe + "'\">Tentar de novo</button>",
+                            "text/html", "UTF-8", null);
+                }
+            }
         });
         web.setDownloadListener((url, ua, cd, mime, len) -> {
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) { }
         });
 
-        web.loadUrl("file:///android_asset/www/index.html");
+        web.loadUrl(remote ? siteUrl : "file:///android_asset/www/index.html");
     }
 
     @Override

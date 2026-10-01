@@ -37,7 +37,9 @@ public class MainActivity extends Activity {
     private static final String APK_MIME = "application/vnd.android.package-archive";
     private static final String[] ORIENT_VALUES = {"auto", "portrait", "landscape"};
 
-    private EditText etName, etPkg, etVersion, etHtml;
+    private EditText etName, etPkg, etVersion, etHtml, etUrl;
+    private Spinner spMode;
+    private LinearLayout boxFile, boxUrl;
     private CheckBox cbFull;
     private Spinner spOrient;
     private TextView tvSource, tvIcon, tvStatus;
@@ -76,21 +78,51 @@ public class MainActivity extends Activity {
         etVersion = edit("1.0", "1.0");
         col.addView(etVersion);
 
-        col.addView(label("Site"));
+        col.addView(label("Origem do site"));
+        spMode = new Spinner(this);
+        spMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Arquivo HTML / ZIP / código", "URL (site online)"}));
+        col.addView(spMode);
+
+        boxFile = new LinearLayout(this);
+        boxFile.setOrientation(LinearLayout.VERTICAL);
         Button bSource = new Button(this);
         bSource.setText("Escolher HTML ou ZIP");
         bSource.setOnClickListener(v -> pick(REQ_SOURCE));
-        col.addView(bSource);
+        boxFile.addView(bSource);
         tvSource = new TextView(this);
         tvSource.setText("Nenhum arquivo (ou cole o código abaixo)");
-        col.addView(tvSource);
-
+        boxFile.addView(tvSource);
         etHtml = edit("<!doctype html>… cole o código aqui", "");
         etHtml.setMinLines(5);
         etHtml.setGravity(Gravity.TOP);
         etHtml.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        col.addView(etHtml);
+        boxFile.addView(etHtml);
+        col.addView(boxFile);
+
+        boxUrl = new LinearLayout(this);
+        boxUrl.setOrientation(LinearLayout.VERTICAL);
+        etUrl = edit("https://meusite.com", "");
+        etUrl.setSingleLine(true);
+        etUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        boxUrl.addView(etUrl);
+        TextView tvUrlHint = new TextView(this);
+        tvUrlHint.setText("O app abrirá este endereço e precisa de internet para funcionar.");
+        tvUrlHint.setTextSize(12);
+        boxUrl.addView(tvUrlHint);
+        boxUrl.setVisibility(android.view.View.GONE);
+        col.addView(boxUrl);
+
+        spMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(android.widget.AdapterView<?> p, android.view.View v, int pos, long id) {
+                boolean url = pos == 1;
+                boxUrl.setVisibility(url ? android.view.View.VISIBLE : android.view.View.GONE);
+                boxFile.setVisibility(url ? android.view.View.GONE : android.view.View.VISIBLE);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p) { }
+        });
 
         col.addView(label("Ícone (opcional)"));
         Button bIcon = new Button(this);
@@ -204,8 +236,12 @@ public class MainActivity extends Activity {
         o.versionName = etVersion.getText().toString();
         o.fullscreen = cbFull.isChecked();
         o.orientation = ORIENT_VALUES[spOrient.getSelectedItemPosition()];
-        o.sourceUri = sourceUri;
-        o.htmlText = etHtml.getText().toString();
+        if (spMode.getSelectedItemPosition() == 1) {
+            o.url = etUrl.getText().toString();
+        } else {
+            o.sourceUri = sourceUri;
+            o.htmlText = etHtml.getText().toString();
+        }
         o.iconUri = iconUri;
 
         btnBuild.setEnabled(false);

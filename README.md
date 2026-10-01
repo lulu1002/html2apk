@@ -7,7 +7,8 @@ App Android que gera APKs a partir de HTML **dentro do próprio celular**, sem s
 2. O módulo `app` (o construtor) embute esse molde compilado como `assets/template.apk`.
 3. Ao tocar em **Gerar APK**, o construtor:
    - copia o molde e troca nome/pacote/versão no `AndroidManifest.xml` binário (`AxmlPatcher`);
-   - coloca seu HTML (ou ZIP do site) em `assets/www/`, grava `config.json` (tela cheia/orientação);
+   - coloca seu HTML (ou ZIP do site) em `assets/www/`, ou, no modo **URL**, grava o endereço em `config.json` (`url`);
+   - grava `config.json` (tela cheia/orientação);
    - troca o ícone (se você escolheu um);
    - reescreve o ZIP com `resources.arsc` alinhado (`ZipWriter`) e assina com `apksig` (v1+v2).
 
@@ -25,3 +26,4 @@ Local, com Android SDK + JDK 17: `gradle :app:assembleDebug`.
   e dois apps gerados não instalariam juntos.
 - `versionCode` fica sempre 1. Para atualizar um app já instalado, desinstale antes se o Android reclamar.
 - ZIP: precisa ter `index.html` (pode estar dentro de uma pasta).
+- URL: aceita `http://` ou `https://` (sem esquema, assume `https://`). O app gerado precisa de internet e mostra uma tela de erro com botão "Tentar de novo" se o site não carregar.

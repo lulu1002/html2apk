@@ -43,6 +43,7 @@ public final class ApkBuilder {
         public String versionName = "1.0";
         public boolean fullscreen = false;
         public String orientation = "auto"; // auto | portrait | landscape
+        public String url;                  // modo URL: o app abre este site (http/https)
         public Uri sourceUri;               // .html ou .zip (com index.html)
         public String htmlText;             // código colado (se não houver arquivo)
         public Uri iconUri;                 // opcional
@@ -55,6 +56,27 @@ public final class ApkBuilder {
             Pattern.compile("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$");
 
     private ApkBuilder() {}
+
+    /** Valida e normaliza a URL: aceita "site.com" (assume https) e só permite http/https. */
+    public static String normalizeUrl(String raw) {
+        String u = raw == null ? "" : raw.trim();
+        if (u.isEmpty()) throw new IllegalArgumentException("Digite a URL do site.");
+        if (!u.matches("(?i)^[a-z][a-z0-9+.-]*:.*")) u = "https://" + u;
+        java.net.URI uri;
+        try {
+            uri = new java.net.URI(u);
+        } catch (java.net.URISyntaxException e) {
+            throw new IllegalArgumentException("URL inválida.");
+        }
+        String sch = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+        if (!sch.equals("http") && !sch.equals("https")) {
+            throw new IllegalArgumentException("A URL deve começar com http:// ou https://");
+        }
+        if (uri.getHost() == null || uri.getHost().isEmpty()) {
+            throw new IllegalArgumentException("URL inválida.");
+        }
+        return u;
+    }
 
     public static String suggestPackage(String name) {
         String s = Normalizer.normalize(name == null ? "" : name, Normalizer.Form.NFD)
@@ -84,7 +106,10 @@ public final class ApkBuilder {
         pr.step("Lendo o site…");
         byte[] htmlBytes = null;
         String zipPrefix = null;
-        if (o.sourceUri != null) {
+        String siteUrl = null;
+        if (o.url != null) {
+            siteUrl = normalizeUrl(o.url);
+        } else if (o.sourceUri != null) {
             if (isZip(ctx, o.sourceUri)) zipPrefix = findZipRoot(ctx, o.sourceUri);
             else try (InputStream is = open(ctx, o.sourceUri)) { htmlBytes = readAll(is); }
         } else if (o.htmlText != null && !o.htmlText.trim().isEmpty()) {
@@ -107,6 +132,7 @@ public final class ApkBuilder {
         JSONObject cfg = new JSONObject();
         cfg.put("fullscreen", o.fullscreen);
         cfg.put("orientation", o.orientation == null ? "auto" : o.orientation);
+        if (siteUrl != null) cfg.put("url", siteUrl);
 
         File outDir = new File(ctx.getFilesDir(), "apks");
         if (!outDir.exists()) outDir.mkdirs();
@@ -139,10 +165,13 @@ public final class ApkBuilder {
             }
             zw.putDeflated("assets/config.json", cfg.toString().getBytes(StandardCharsets.UTF_8));
 
-            pr.step("Copiando arquivos do site…");
-            if (htmlBytes != null) {
+            if (siteUrl != null) {
+                // modo URL: nada a copiar, o app carrega o site online
+            } else if (htmlBytes != null) {
+                pr.step("Copiando arquivos do site…");
                 zw.putDeflated("assets/www/index.html", htmlBytes);
             } else {
+                pr.step("Copiando arquivos do site…");
                 try (ZipInputStream zi = new ZipInputStream(open(ctx, o.sourceUri))) {
                     ZipEntry se;
                     while ((se = zi.getNextEntry()) != null) {
