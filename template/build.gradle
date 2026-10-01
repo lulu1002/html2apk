@@ -1,0 +1,32 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.htmltoapk.template'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.htmltoapk.template"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "__VERSION__"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+// IMPORTANTE: sem dependências (androidx etc.). Elas injetam permissões/providers
+// com o nome do pacote no manifest, o que quebra a instalação de 2 apps gerados.

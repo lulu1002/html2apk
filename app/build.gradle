@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+// O molde (módulo :template) é compilado primeiro e embutido como assets/template.apk
+def templateAssetsDir = layout.buildDirectory.dir("generated/templateAssets").get().asFile
+
+android {
+    namespace 'com.htmltoapk.builder'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.htmltoapk.builder"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets {
+        main { assets.srcDir templateAssetsDir }
+    }
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.12.0'
+    implementation 'com.android.tools.build:apksig:8.5.2'
+}
+
+def copyTemplate = tasks.register('copyTemplateApk', Copy) {
+    dependsOn ':template:assembleRelease'
+    from(project(':template').layout.buildDirectory.dir('outputs/apk/release')) {
+        include '*.apk'
+        rename { 'template.apk' }
+    }
+    into templateAssetsDir
+}
+
+tasks.configureEach { t ->
+    if (t.name ==~ /merge.*Assets/) t.dependsOn(copyTemplate)
+}
