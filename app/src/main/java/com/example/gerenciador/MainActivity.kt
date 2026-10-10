@@ -7,25 +7,16 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.media.MediaMetadataRetriever
-import android.util.LruCache
-import android.widget.Button
-import android.widget.HorizontalScrollView
-import android.widget.ImageView
-import java.util.concurrent.Executors
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
-import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.StateListDrawable
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
-import android.provider.DocumentsContract
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.text.format.Formatter
+import android.util.LruCache
 import android.view.ActionMode
 import android.view.Gravity
 import android.view.Menu
@@ -35,21 +26,27 @@ import android.view.ViewGroup
 import android.webkit.MimeTypeMap
 import android.widget.AbsListView
 import android.widget.BaseAdapter
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridView
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.documentfile.provider.DocumentFile
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 /**
  * Gerenciador de arquivos baseado no Storage Access Framework.
- * Toque longo seleciona (vários itens); toque num arquivo abre; tema e visualização no menu.
+ * Listagens vêm de UMA consulta por pasta, em segundo plano, com cache em memória.
  */
 class MainActivity : Activity() {
 
@@ -59,19 +56,36 @@ class MainActivity : Activity() {
     }
 
     private val prefs by lazy { getSharedPreferences("prefs", MODE_PRIVATE) }
-    private val stack = ArrayList<DocumentFile>() // raiz ... pasta atual
-    private var all: List<DocumentFile> = emptyList()
-    private var shown: List<DocumentFile> = emptyList()
+    private val stack = ArrayList<Entry>() // raiz ... pasta atual
+    private var all: List<Entry> = emptyList()
+    private var shown: List<Entry> = emptyList()
     private var sort = Sort.NOME
     private var mode = Mode.LISTA
     private var filter = ""
 
     // "área de transferência" interna para copiar/mover
-    private var clip: List<DocumentFile> = emptyList()
-    private var clipParent: DocumentFile? = null
+    private var clip: List<Entry> = emptyList()
+    private var clipParent: Entry? = null
     private var clipCut = false
 
     private var actionMode: ActionMode? = null
+    private var needsRefresh = false
+    private var loadToken = 0
+    private var loading = false
+
+    // cache de listagens (só acessado na thread de UI): abrir pasta já visitada é instantâneo
+    private val dirCache = object : LinkedHashMap<String, List<Entry>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Entry>>?) = size > 40
+    }
+
+    private val ioPool = Executors.newSingleThreadExecutor()
+    private val thumbPool = Executors.newFixedThreadPool(3)
+    private val thumbCache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
+    }
+    private val dateFmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
 
     private lateinit var searchBox: EditText
     private lateinit var pathView: TextView
@@ -80,13 +94,6 @@ class MainActivity : Activity() {
     private lateinit var emptyView: TextView
     private lateinit var chipScroll: HorizontalScrollView
     private lateinit var chipBar: LinearLayout
-
-    private val thumbPool = Executors.newFixedThreadPool(3)
-    private val thumbCache = object : LruCache<String, Bitmap>(
-        (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()
-    ) {
-        override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppTheme.apply(this)
@@ -112,35 +119,52 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(24), dp(16), dp(24))
             visibility = View.GONE
         }
-        container = FrameLayout(this)
-        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
-        val match = ViewGroup.LayoutParams.MATCH_PARENT
-        root.addView(searchBox, match, wrap)
-        root.addView(pathView, match, wrap)
         chipBar = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
         chipScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(chipBar)
             visibility = View.GONE
         }
+        container = FrameLayout(this)
+        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        root.addView(searchBox, match, wrap)
+        root.addView(pathView, match, wrap)
         root.addView(chipScroll, match, wrap)
         root.addView(emptyView, match, wrap)
         root.addView(container, match, match)
         setContentView(root)
 
-        prefs.getString(KEY_TREE, null)?.let { saved ->
-            DocumentFile.fromTreeUri(this, Uri.parse(saved))?.takeIf { it.canRead() }?.let {
-                stack.add(it)
-            }
-        }
         renderShortcuts()
         buildList()
+
+        val saved = prefs.getString(KEY_TREE, null)
+        if (saved != null) {
+            ioPool.execute {
+                val r = Fs.root(this, Uri.parse(saved))
+                runOnUiThread {
+                    if (r != null && stack.isEmpty()) {
+                        stack.add(r)
+                        refresh()
+                    }
+                }
+            }
+        }
         refresh()
     }
 
     override fun onDestroy() {
         thumbPool.shutdownNow()
+        ioPool.shutdownNow()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (needsRefresh && stack.isNotEmpty()) {
+            needsRefresh = false
+            refresh() // voltou do editor: relê a pasta (em segundo plano)
+        }
     }
 
     // ------------------------------------------------------- lista / grade
@@ -161,9 +185,11 @@ class MainActivity : Activity() {
 
         v.choiceMode = AbsListView.CHOICE_MODE_MULTIPLE_MODAL
         v.setMultiChoiceModeListener(selectionListener)
+        v.isFastScrollEnabled = true
         v.setOnItemClickListener { _, _, pos, _ ->
+            if (pos !in shown.indices) return@setOnItemClickListener
             val item = shown[pos]
-            if (item.isDirectory) {
+            if (item.isDir) {
                 stack.add(item)
                 clearSearch()
                 refresh()
@@ -256,18 +282,18 @@ class MainActivity : Activity() {
         return view
     }
 
-    private fun iconFor(f: DocumentFile): String {
-        if (f.isDirectory) return "📁"
-        val ext = (f.name ?: "").substringAfterLast('.', "").lowercase()
-        val mime = f.type ?: ""
+    private fun iconFor(f: Entry): String {
+        if (f.isDir) return "📁"
+        val ext = f.name.substringAfterLast('.', "").lowercase()
+        val mime = f.mime
         return when {
             mime.startsWith("image/") -> "🖼️"
             mime.startsWith("video/") -> "🎬"
             mime.startsWith("audio/") -> "🎵"
             ext == "pdf" -> "📕"
-            ext in setOf("zip", "rar", "7z", "tar", "gz") -> "🗜️"
-            ext in setOf("apk") -> "📦"
-            mime.startsWith("text/") || Highlighter.supports(f.name ?: "") || ext in setOf("txt", "log", "csv") -> "📝"
+            ext in ARCHIVES -> "🗜️"
+            ext == "apk" -> "📦"
+            mime.startsWith("text/") || ext in TEXT_EXT || Highlighter.supports(f.name) -> "📝"
             else -> "📄"
         }
     }
@@ -275,22 +301,22 @@ class MainActivity : Activity() {
     private fun applyFilter() {
         actionMode?.finish()
         val q = filter.trim().lowercase()
-        val filtered = if (q.isEmpty()) all else all.filter { (it.name ?: "").lowercase().contains(q) }
-        val cmp: Comparator<DocumentFile> = when (sort) {
-            Sort.NOME -> compareBy<DocumentFile> { it.name?.lowercase() ?: "" }
-            Sort.TAMANHO -> compareByDescending<DocumentFile> { it.length() }
-            Sort.DATA -> compareByDescending<DocumentFile> { it.lastModified() }
+        val filtered = if (q.isEmpty()) all else all.filter { it.name.lowercase().contains(q) }
+        val cmp: Comparator<Entry> = when (sort) {
+            Sort.NOME -> compareBy<Entry> { it.name.lowercase() }
+            Sort.TAMANHO -> compareByDescending<Entry> { it.size }
+            Sort.DATA -> compareByDescending<Entry> { it.modified }
         }
-        shown = filtered.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.then(cmp))
+        shown = filtered.sortedWith(compareBy<Entry> { !it.isDir }.then(cmp))
 
         emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
         emptyView.text = when {
             stack.isEmpty() -> "Use o menu para escolher uma pasta."
+            loading && all.isEmpty() -> "Carregando…"
             all.isEmpty() -> "Pasta vazia."
             else -> "Nada encontrado."
         }
 
-        val fmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
         val items = shown
         val ctx = this
         val itemAdapter = object : BaseAdapter() {
@@ -302,21 +328,23 @@ class MainActivity : Activity() {
                 val h = v.tag as Holder
                 val f = items[position]
                 h.icon.text = iconFor(f)
+                h.name.text = f.name
                 val t = h.thumb
                 if (t != null) {
-                    val mime = f.type ?: ""
-                    if (!f.isDirectory && (mime.startsWith("image/") || mime.startsWith("video/"))) {
-                        loadThumb(f, t, mime.startsWith("video/"))
+                    if (!f.isDir && (f.mime.startsWith("image/") || f.mime.startsWith("video/"))) {
+                        loadThumb(f, t, f.mime.startsWith("video/"))
                     } else {
                         t.tag = null
                         t.setImageDrawable(null)
                     }
                 }
-                h.name.text = f.name ?: "?"
-                val size = if (f.isDirectory) "" else Formatter.formatShortFileSize(ctx, f.length())
-                val date = f.lastModified().takeIf { it > 0 }?.let { fmt.format(Date(it)) } ?: ""
-                h.sub?.text = if (mode == Mode.COMPACTA) size
-                else listOf(size, date).filter { it.isNotEmpty() }.joinToString("  ·  ")
+                val size = if (f.isDir || f.size < 0) "" else Formatter.formatShortFileSize(ctx, f.size)
+                if (mode == Mode.COMPACTA) {
+                    h.sub?.text = size
+                } else {
+                    val date = if (f.modified > 0) dateFmt.format(Date(f.modified)) else ""
+                    h.sub?.text = listOf(size, date).filter { it.isNotEmpty() }.joinToString("  ·  ")
+                }
                 return v
             }
         }
@@ -338,8 +366,8 @@ class MainActivity : Activity() {
             menu.add(0, A_DELETE, 2, "Excluir").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             menu.add(0, A_SHARE, 3, "Compartilhar")
             menu.add(0, A_ZIP, 4, "Compactar em ZIP")
-            menu.add(0, A_ALL, 4, "Selecionar tudo")
-            menu.add(0, A_MORE, 5, "Mais ações…")
+            menu.add(0, A_ALL, 5, "Selecionar tudo")
+            menu.add(0, A_MORE, 6, "Mais ações…")
             return true
         }
 
@@ -372,9 +400,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun selected(): List<DocumentFile> {
+    private fun selected(): List<Entry> {
         val arr = list.checkedItemPositions ?: return emptyList()
-        val res = ArrayList<DocumentFile>()
+        val res = ArrayList<Entry>()
         for (i in 0 until arr.size()) {
             if (arr.valueAt(i)) {
                 val p = arr.keyAt(i)
@@ -412,16 +440,22 @@ class MainActivity : Activity() {
         when (item.itemId) {
             M_PICK -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_TREE)
             M_NEW_DIR -> prompt("Nova pasta", "") { name ->
-                val dir = stack.lastOrNull()?.createDirectory(name)
-                toast(if (dir != null) "Pasta criada" else "Falha ao criar pasta")
-                refresh()
+                val parent = stack.lastOrNull()
+                if (parent != null) background { Fs.createDir(this, parent.uri, name) != null }
             }
             M_NEW_FILE -> prompt("Novo arquivo (ex.: notas.txt)", "") { name ->
-                val f = stack.lastOrNull()?.createFile(guessMime(name), name)
-                if (f != null) {
-                    refresh()
-                    openEditor(f)
-                } else toast("Falha ao criar arquivo")
+                val parent = stack.lastOrNull()
+                if (parent != null) {
+                    ioPool.execute {
+                        val u = Fs.createFile(this, parent.uri, guessMime(name), name)
+                        runOnUiThread {
+                            if (u != null) {
+                                refresh()
+                                openEditorUri(u, name)
+                            } else toast("Falha ao criar arquivo")
+                        }
+                    }
+                }
             }
             M_PASTE -> paste()
             M_SORT -> choose("Ordenar por", Sort.values().map { it.label }, sort.ordinal) {
@@ -464,9 +498,17 @@ class MainActivity : Activity() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             prefs.edit().putString(KEY_TREE, uri.toString()).apply()
-            stack.clear()
-            DocumentFile.fromTreeUri(this, uri)?.let { stack.add(it) }
-            refresh()
+            ioPool.execute {
+                val r = Fs.root(this, uri)
+                runOnUiThread {
+                    if (r != null) {
+                        stack.clear()
+                        stack.add(r)
+                        clearSearch()
+                        refresh()
+                    } else toast("Não foi possível abrir a pasta")
+                }
+            }
         }
     }
 
@@ -481,11 +523,6 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (stack.isNotEmpty() && ::list.isInitialized) refresh() // pode ter sido editado
-    }
-
     // ------------------------------------------------------------ listagem
 
     private fun clearSearch() {
@@ -493,28 +530,52 @@ class MainActivity : Activity() {
         searchBox.setText("")
     }
 
+    /** Mostra o cache na hora (se houver) e relê a pasta em segundo plano. */
     private fun refresh() {
         val current = stack.lastOrNull()
         if (current == null) {
             pathView.text = "Nenhuma pasta selecionada"
             all = emptyList()
-        } else {
-            pathView.text = stack.joinToString(" / ") { it.name ?: "?" }
-            all = current.listFiles().toList()
+            loading = false
+            applyFilter()
+            invalidateOptionsMenu()
+            return
         }
+        pathView.text = stack.joinToString(" / ") { it.name }
+        val key = current.uri.toString()
+        val cached = dirCache[key]
+        all = cached ?: emptyList()
+        loading = true
         applyFilter()
         invalidateOptionsMenu()
+
+        val token = ++loadToken
+        ioPool.execute {
+            if (token != loadToken) return@execute // já navegou para outra pasta
+            val result = Fs.list(this, current.uri)
+            runOnUiThread {
+                if (token != loadToken) return@runOnUiThread
+                loading = false
+                if (result != null) {
+                    dirCache[key] = result
+                    all = result
+                } else {
+                    toast("Falha ao ler a pasta")
+                }
+                applyFilter()
+            }
+        }
     }
 
     // ---------------------------------------------------------------- ações
 
-    private fun showItemMenu(f: DocumentFile) {
+    private fun showItemMenu(f: Entry) {
         val actions = ArrayList<Pair<String, () -> Unit>>()
-        if (!f.isDirectory) {
+        if (!f.isDir) {
             actions += "Abrir" to { openFile(f) }
-            actions += "Editar como texto" to { openEditor(f) }
+            actions += "Editar como texto" to { openEditorUri(f.uri, f.name) }
             actions += "Compartilhar" to { share(listOf(f)) }
-            if ((f.name ?: "").endsWith(".zip", ignoreCase = true)) {
+            if (f.name.endsWith(".zip", ignoreCase = true)) {
                 actions += "Ver conteúdo do ZIP" to { listZip(f) }
                 actions += "Extrair aqui" to { extractZip(f) }
             }
@@ -527,35 +588,36 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun openFile(file: DocumentFile) {
+    private fun openFile(file: Entry) {
         val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(file.uri, file.type ?: "*/*")
+            .setDataAndType(file.uri, file.mime.ifEmpty { "*/*" })
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             // sem app para o tipo: tenta abrir no editor de texto
-            openEditor(file)
+            openEditorUri(file.uri, file.name)
         }
     }
 
-    private fun openEditor(file: DocumentFile) {
+    private fun openEditorUri(uri: Uri, name: String) {
+        needsRefresh = true
         startActivity(
             Intent(this, EditorActivity::class.java)
-                .setData(file.uri)
-                .putExtra(EditorActivity.EXTRA_NAME, file.name)
+                .setData(uri)
+                .putExtra(EditorActivity.EXTRA_NAME, name)
         )
     }
 
-    private fun share(files: List<DocumentFile>) {
-        val only = files.filter { !it.isDirectory }
+    private fun share(files: List<Entry>) {
+        val only = files.filter { !it.isDir }
         if (only.isEmpty()) {
             toast("Pastas não podem ser compartilhadas")
             return
         }
         val send = if (only.size == 1) {
             Intent(Intent.ACTION_SEND)
-                .setType(only[0].type ?: "*/*")
+                .setType(only[0].mime.ifEmpty { "*/*" })
                 .putExtra(Intent.EXTRA_STREAM, only[0].uri)
         } else {
             Intent(Intent.ACTION_SEND_MULTIPLE)
@@ -565,33 +627,33 @@ class MainActivity : Activity() {
         startActivity(Intent.createChooser(send, "Compartilhar"))
     }
 
-    private fun rename(f: DocumentFile) {
-        prompt("Renomear", f.name ?: "") { name ->
-            toast(if (f.renameTo(name)) "Renomeado" else "Falha ao renomear")
-            refresh()
+    private fun rename(f: Entry) {
+        prompt("Renomear", f.name) { name ->
+            background { Fs.rename(this, f.uri, name) }
         }
     }
 
-    private fun deleteAll(files: List<DocumentFile>) {
-        val msg = if (files.size == 1) "Excluir \"${files[0].name}\"" + if (files[0].isDirectory) " e todo o conteúdo?" else "?"
+    private fun deleteAll(files: List<Entry>) {
+        val msg = if (files.size == 1) "Excluir \"${files[0].name}\"" + if (files[0].isDir) " e todo o conteúdo?" else "?"
         else "Excluir ${files.size} itens (pastas incluem todo o conteúdo)?"
         AlertDialog.Builder(this)
             .setTitle("Excluir")
             .setMessage(msg)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Excluir") { _, _ ->
-                background { files.map { it.delete() }.all { it } }
+                background { files.map { Fs.delete(this, it.uri) }.all { it } }
             }.show()
     }
 
-    private fun details(f: DocumentFile) {
+    private fun details(f: Entry) {
         val fmt = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
         val msg = buildString {
             appendLine("Nome: ${f.name}")
-            appendLine("Tipo: ${if (f.isDirectory) "pasta" else (f.type ?: "desconhecido")}")
-            if (!f.isDirectory) appendLine("Tamanho: ${Formatter.formatFileSize(this@MainActivity, f.length())} (${f.length()} bytes)")
-            if (f.lastModified() > 0) appendLine("Modificado: ${fmt.format(Date(f.lastModified()))}")
-            appendLine("Gravável: ${if (f.canWrite()) "sim" else "não"}")
+            appendLine("Tipo: ${if (f.isDir) "pasta" else f.mime.ifEmpty { "desconhecido" }}")
+            if (!f.isDir && f.size >= 0) {
+                appendLine("Tamanho: ${Formatter.formatFileSize(this@MainActivity, f.size)} (${f.size} bytes)")
+            }
+            if (f.modified > 0) appendLine("Modificado: ${fmt.format(Date(f.modified))}")
             append("URI: ${f.uri}")
         }
         AlertDialog.Builder(this).setTitle("Detalhes").setMessage(msg)
@@ -600,7 +662,7 @@ class MainActivity : Activity() {
 
     // ----------------------------------------------------- copiar/mover/colar
 
-    private fun setClip(files: List<DocumentFile>, cut: Boolean) {
+    private fun setClip(files: List<Entry>, cut: Boolean) {
         clip = files
         clipParent = stack.lastOrNull()
         clipCut = cut
@@ -618,16 +680,10 @@ class MainActivity : Activity() {
             for (src in items) {
                 var ok = false
                 try {
-                    if (cut && parent != null) {
-                        ok = try {
-                            DocumentsContract.moveDocument(contentResolver, src.uri, parent.uri, dest.uri) != null
-                        } catch (e: Exception) {
-                            false
-                        }
-                    }
+                    if (cut && parent != null) ok = Fs.move(this, src.uri, parent.uri, dest.uri)
                     if (!ok) {
-                        ok = copyRecursive(src, dest)
-                        if (ok && cut) src.delete()
+                        ok = copyEntry(src, dest.uri, null)
+                        if (ok && cut) Fs.delete(this, src.uri)
                     }
                 } catch (e: Exception) {
                     ok = false
@@ -639,40 +695,44 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun copyRecursive(src: DocumentFile, destDir: DocumentFile): Boolean {
-        val name = uniqueName(destDir, src.name ?: "sem_nome")
-        if (src.isDirectory) {
-            val nd = destDir.createDirectory(name) ?: return false
+    /** [existing] = nomes já presentes no destino (null = consulta agora). */
+    private fun copyEntry(src: Entry, destDir: Uri, existing: Set<String>?): Boolean {
+        val names = existing ?: (Fs.list(this, destDir)?.map { it.name }?.toSet() ?: emptySet())
+        val name = uniqueName(names, src.name)
+        if (src.isDir) {
+            val nd = Fs.createDir(this, destDir, name) ?: return false
             var ok = true
-            for (child in src.listFiles()) ok = copyRecursive(child, nd) && ok
+            val children = Fs.list(this, src.uri) ?: return false
+            for (child in children) ok = copyEntry(child, nd, emptySet()) && ok
             return ok
         }
-        val nf = destDir.createFile(src.type ?: guessMime(name), name) ?: return false
-        contentResolver.openInputStream(src.uri).use { input ->
-            contentResolver.openOutputStream(nf.uri, "w").use { output ->
-                if (input == null || output == null) return false
-                input.copyTo(output)
-            }
+        val nf = Fs.createFile(this, destDir, src.mime.ifEmpty { guessMime(name) }, name) ?: return false
+        val input = contentResolver.openInputStream(src.uri) ?: return false
+        val output = contentResolver.openOutputStream(nf, "w")
+        if (output == null) {
+            input.close()
+            return false
         }
+        input.use { i -> output.use { o -> i.copyTo(o, 64 * 1024) } }
         return true
     }
 
-    private fun uniqueName(dir: DocumentFile, name: String): String {
-        if (dir.findFile(name) == null) return name
+    private fun uniqueName(existing: Set<String>, name: String): String {
+        if (name !in existing) return name
         val dot = name.lastIndexOf('.')
         val base = if (dot > 0) name.substring(0, dot) else name
         val ext = if (dot > 0) name.substring(dot) else ""
         var i = 1
         while (true) {
             val candidate = "$base (cópia${if (i > 1) " $i" else ""})$ext"
-            if (dir.findFile(candidate) == null) return candidate
+            if (candidate !in existing) return candidate
             i++
         }
     }
 
     // ------------------------------------------------------------------ ZIP
 
-    private fun listZip(zip: DocumentFile) {
+    private fun listZip(zip: Entry) {
         Thread {
             val sb = StringBuilder()
             var n = 0
@@ -707,14 +767,13 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun extractZip(zip: DocumentFile) {
+    private fun extractZip(zip: Entry) {
         val parent = stack.lastOrNull() ?: return
-        val base = (zip.name ?: "arquivo").let {
-            if (it.endsWith(".zip", ignoreCase = true)) it.dropLast(4) else it
-        }
+        val base = if (zip.name.endsWith(".zip", ignoreCase = true)) zip.name.dropLast(4) else zip.name
         background {
-            val dest = parent.createDirectory(uniqueName(parent, base)) ?: return@background false
-            val dirCache = HashMap<String, DocumentFile>()
+            val names = Fs.list(this, parent.uri)?.map { it.name }?.toSet() ?: emptySet()
+            val dest = Fs.createDir(this, parent.uri, uniqueName(names, base)) ?: return@background false
+            val dirCache = HashMap<String, Uri>()
             var ok = true
             val input = contentResolver.openInputStream(zip.uri) ?: return@background false
             input.use { raw ->
@@ -731,9 +790,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun writeZipEntry(
-        dest: DocumentFile, cache: HashMap<String, DocumentFile>, entry: ZipEntry, zis: ZipInputStream
-    ): Boolean {
+    private fun writeZipEntry(dest: Uri, cache: HashMap<String, Uri>, entry: ZipEntry, zis: ZipInputStream): Boolean {
         val parts = entry.name.replace('\\', '/').split('/').filter { it.isNotEmpty() }
         if (parts.isEmpty()) return true
         // proteção contra "zip slip": ignora caminhos com . ou ..
@@ -743,27 +800,35 @@ class MainActivity : Activity() {
         var key = ""
         for (p in dirParts) {
             key += "/$p"
-            dir = cache[key] ?: (dir.createDirectory(p) ?: return false).also { cache[key] = it }
+            val known = cache[key]
+            dir = if (known != null) known else {
+                val created = Fs.createDir(this, dir, p) ?: return false
+                cache[key] = created
+                created
+            }
         }
         if (entry.isDirectory) return true
-        val name = uniqueName(dir, parts.last())
-        val f = dir.createFile(guessMime(name), name) ?: return false
-        contentResolver.openOutputStream(f.uri, "w")?.use { zis.copyTo(it) } ?: return false
+        val name = parts.last()
+        val f = Fs.createFile(this, dir, guessMime(name), name) ?: return false
+        val out = contentResolver.openOutputStream(f, "w") ?: return false
+        out.use { zis.copyTo(it, 64 * 1024) }
         return true
     }
 
-    private fun zipFiles(files: List<DocumentFile>) {
+    private fun zipFiles(files: List<Entry>) {
         val parent = stack.lastOrNull() ?: return
         val suggestion = (if (files.size == 1) files[0].name else "arquivos") + ".zip"
         prompt("Nome do ZIP", suggestion) { typed ->
             val name = if (typed.endsWith(".zip", ignoreCase = true)) typed else "$typed.zip"
             background {
-                val out = parent.createFile("application/zip", uniqueName(parent, name)) ?: return@background false
+                val names = Fs.list(this, parent.uri)?.map { it.name }?.toSet() ?: emptySet()
+                val out = Fs.createFile(this, parent.uri, "application/zip", uniqueName(names, name))
+                    ?: return@background false
                 var ok = true
-                val os = contentResolver.openOutputStream(out.uri, "w") ?: return@background false
+                val os = contentResolver.openOutputStream(out, "w") ?: return@background false
                 os.use { raw ->
                     ZipOutputStream(raw.buffered()).use { zos ->
-                        for (f in files) ok = addToZip(zos, f, f.name ?: "item") && ok
+                        for (f in files) ok = addToZip(zos, f, f.name) && ok
                     }
                 }
                 ok
@@ -771,12 +836,13 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun addToZip(zos: ZipOutputStream, f: DocumentFile, path: String): Boolean {
-        if (f.isDirectory) {
+    private fun addToZip(zos: ZipOutputStream, f: Entry, path: String): Boolean {
+        if (f.isDir) {
             zos.putNextEntry(ZipEntry("$path/"))
             zos.closeEntry()
             var ok = true
-            for (c in f.listFiles()) ok = addToZip(zos, c, "$path/${c.name ?: "item"}") && ok
+            val children = Fs.list(this, f.uri) ?: return false
+            for (c in children) ok = addToZip(zos, c, "$path/${c.name}") && ok
             return ok
         }
         zos.putNextEntry(ZipEntry(path))
@@ -785,7 +851,7 @@ class MainActivity : Activity() {
             zos.closeEntry()
             return false
         }
-        input.use { it.copyTo(zos) }
+        input.use { it.copyTo(zos, 64 * 1024) }
         zos.closeEntry()
         return true
     }
@@ -817,8 +883,8 @@ class MainActivity : Activity() {
             toast("Escolha uma pasta primeiro")
             return
         }
-        val path = stack.drop(1).map { it.name ?: "" }
-        prompt("Nome do atalho", cur.name ?: "Pasta") { name ->
+        val path = stack.drop(1).map { it.name }
+        prompt("Nome do atalho", cur.name) { name ->
             val list = ShortcutStore.load(this)
             if (list.any { it.root == rootUri && it.path == path }) {
                 toast("Já existe um atalho para esta pasta")
@@ -831,25 +897,26 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Reconstrói a pilha de pastas (uma consulta por nível) em segundo plano e mostra o destino. */
     private fun openShortcut(sc: Shortcut) {
-        val root = DocumentFile.fromTreeUri(this, Uri.parse(sc.root))
-        if (root == null || !root.canRead()) {
-            toast("Sem acesso a essa pasta. Escolha-a de novo no menu.")
-            return
-        }
-        Thread {
-            val start: DocumentFile = root
-            val newStack = arrayListOf(start)
-            var cur: DocumentFile = start
+        ioPool.execute {
+            val root = Fs.root(this, Uri.parse(sc.root))
+            if (root == null) {
+                runOnUiThread { toast("Sem acesso a essa pasta. Escolha-a de novo no menu.") }
+                return@execute
+            }
+            val newStack = arrayListOf(root)
+            var cur: Entry = root
             var missing: String? = null
             for (n in sc.path) {
-                val c = cur.findFile(n)
-                if (c == null || !c.isDirectory) {
+                val children = Fs.list(this, cur.uri)
+                val next = children?.firstOrNull { it.name == n && it.isDir }
+                if (next == null) {
                     missing = n
                     break
                 }
-                newStack.add(c)
-                cur = c
+                newStack.add(next)
+                cur = next
             }
             runOnUiThread {
                 prefs.edit().putString(KEY_TREE, sc.root).apply()
@@ -859,7 +926,7 @@ class MainActivity : Activity() {
                 refresh()
                 if (missing != null) toast("Pasta \"$missing\" não encontrada; mostrando o mais próximo")
             }
-        }.start()
+        }
     }
 
     private fun shortcutMenu(sc: Shortcut) {
@@ -893,7 +960,7 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------- miniaturas
 
-    private fun loadThumb(f: DocumentFile, iv: ImageView, video: Boolean) {
+    private fun loadThumb(f: Entry, iv: ImageView, video: Boolean) {
         val key = f.uri.toString()
         iv.tag = key
         val cached = thumbCache.get(key)
@@ -926,7 +993,9 @@ class MainActivity : Activity() {
                     val b = r.frameAtTime ?: return null
                     val scale = size.toFloat() / maxOf(b.width, b.height)
                     if (scale >= 1f) b
-                    else Bitmap.createScaledBitmap(b, (b.width * scale).toInt().coerceAtLeast(1), (b.height * scale).toInt().coerceAtLeast(1), true)
+                    else Bitmap.createScaledBitmap(
+                        b, (b.width * scale).toInt().coerceAtLeast(1), (b.height * scale).toInt().coerceAtLeast(1), true
+                    )
                 } finally {
                     r.release()
                 }
@@ -945,7 +1014,7 @@ class MainActivity : Activity() {
 
     // ----------------------------------------------------------------- util
 
-    /** Roda [work] fora da thread de UI e mostra o resultado + atualiza a lista. */
+    /** Roda [work] fora da thread de UI, mostra o resultado e relê a pasta. */
     private fun background(work: () -> Boolean) {
         toast("Trabalhando…")
         Thread {
@@ -983,6 +1052,8 @@ class MainActivity : Activity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     private companion object {
+        val ARCHIVES = setOf("zip", "rar", "7z", "tar", "gz")
+        val TEXT_EXT = setOf("txt", "log", "csv")
         const val REQ_TREE = 1
         const val THUMB_PX = 192
         const val KEY_TREE = "tree_uri"
