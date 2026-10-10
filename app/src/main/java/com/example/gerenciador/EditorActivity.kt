@@ -286,8 +286,9 @@ class EditorActivity : Activity() {
         menu.add(0, M_WRAP, 2, "Quebra de linha: ligada")
         menu.add(0, M_BIGGER, 3, "Fonte maior")
         menu.add(0, M_SMALLER, 4, "Fonte menor")
-        menu.add(0, M_TOP, 5, "Ir ao início")
-        menu.add(0, M_END, 6, "Ir ao fim")
+        menu.add(0, M_LINE, 5, "Ir para a linha…")
+        menu.add(0, M_TOP, 6, "Ir ao início")
+        menu.add(0, M_END, 7, "Ir ao fim")
         return true
     }
 
@@ -302,10 +303,35 @@ class EditorActivity : Activity() {
             }
             M_BIGGER -> setSize(textSize + 2)
             M_SMALLER -> setSize(textSize - 2)
+            M_LINE -> goToLine()
             M_TOP -> editor.setSelection(0)
             M_END -> editor.setSelection(editor.text.length)
         }
         return true
+    }
+
+    private fun goToLine() {
+        val total = editor.text.count { it == '\n' } + 1
+        val input = EditText(this).apply {
+            hint = "1 a $total"
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ir para a linha")
+            .setView(input)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Ir") { _, _ ->
+                val n = (input.text.toString().toIntOrNull() ?: return@setPositiveButton).coerceIn(1, total)
+                val t = editor.text
+                var line = 1
+                var i = 0
+                while (line < n && i < t.length) {
+                    if (t[i] == '\n') line++
+                    i++
+                }
+                editor.requestFocus()
+                editor.setSelection(i)
+            }.show()
     }
 
     private fun setSize(sp: Float) {
@@ -340,5 +366,6 @@ class EditorActivity : Activity() {
         private const val M_SMALLER = 5
         private const val M_TOP = 6
         private const val M_END = 7
+        private const val M_LINE = 8
     }
 }

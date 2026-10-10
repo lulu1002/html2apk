@@ -4,7 +4,15 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
+import android.util.LruCache
+import android.widget.Button
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import java.util.concurrent.Executors
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.StateListDrawable
@@ -67,6 +75,15 @@ class MainActivity : Activity() {
     private lateinit var container: FrameLayout
     private lateinit var list: AbsListView
     private lateinit var emptyView: TextView
+    private lateinit var chipScroll: HorizontalScrollView
+    private lateinit var chipBar: LinearLayout
+
+    private val thumbPool = Executors.newFixedThreadPool(3)
+    private val thumbCache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppTheme.apply(this)
@@ -97,6 +114,13 @@ class MainActivity : Activity() {
         val match = ViewGroup.LayoutParams.MATCH_PARENT
         root.addView(searchBox, match, wrap)
         root.addView(pathView, match, wrap)
+        chipBar = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
+        chipScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(chipBar)
+            visibility = View.GONE
+        }
+        root.addView(chipScroll, match, wrap)
         root.addView(emptyView, match, wrap)
         root.addView(container, match, match)
         setContentView(root)
@@ -106,8 +130,14 @@ class MainActivity : Activity() {
                 stack.add(it)
             }
         }
+        renderShortcuts()
         buildList()
         refresh()
+    }
+
+    override fun onDestroy() {
+        thumbPool.shutdownNow()
+        super.onDestroy()
     }
 
     // ------------------------------------------------------- lista / grade
@@ -143,7 +173,7 @@ class MainActivity : Activity() {
         applyFilter()
     }
 
-    private class Holder(val icon: TextView, val name: TextView, val sub: TextView?)
+    private class Holder(val icon: TextView, val name: TextView, val sub: TextView?, val thumb: ImageView?)
 
     private fun selectedBackground() = StateListDrawable().apply {
         addState(intArrayOf(android.R.attr.state_activated), ColorDrawable(0x553F8CFF))
@@ -156,25 +186,36 @@ class MainActivity : Activity() {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
+        // caixa com emoji e, por cima, a miniatura (quando houver)
+        fun box(icon: TextView): Pair<FrameLayout, ImageView> {
+            val thumb = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+            val fl = FrameLayout(this).apply {
+                addView(icon, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                addView(thumb, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            return fl to thumb
+        }
         val view: View
         val holder: Holder
         when (mode) {
             Mode.LISTA -> {
-                val icon = text(24f).apply { gravity = Gravity.CENTER; setWidth(dp(40)) }
+                val icon = text(24f).apply { gravity = Gravity.CENTER }
+                val (fl, thumb) = box(icon)
                 val name = text(16f)
                 val sub = text(12f).apply { alpha = 0.65f }
                 val col = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), 0, 0, 0)
                     addView(name)
                     addView(sub)
                 }
                 view = LinearLayout(this).apply {
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(12), dp(10), dp(12), dp(10))
-                    addView(icon)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    addView(fl, LinearLayout.LayoutParams(dp(44), dp(44)))
                     addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 }
-                holder = Holder(icon, name, sub)
+                holder = Holder(icon, name, sub, thumb)
             }
             Mode.COMPACTA -> {
                 val icon = text(18f).apply { gravity = Gravity.CENTER; setWidth(dp(32)) }
@@ -187,10 +228,11 @@ class MainActivity : Activity() {
                     addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     addView(sub)
                 }
-                holder = Holder(icon, name, sub)
+                holder = Holder(icon, name, sub, null)
             }
             Mode.GRADE -> {
                 val icon = text(40f).apply { gravity = Gravity.CENTER }
+                val (fl, thumb) = box(icon)
                 val name = text(12f).apply {
                     gravity = Gravity.CENTER
                     maxLines = 2
@@ -199,11 +241,11 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
                     setPadding(dp(6), dp(10), dp(6), dp(10))
-                    minimumHeight = dp(100)
-                    addView(icon, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    minimumHeight = dp(110)
+                    addView(fl, LinearLayout.LayoutParams(dp(72), dp(72)))
                     addView(name, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 }
-                holder = Holder(icon, name, null)
+                holder = Holder(icon, name, null, thumb)
             }
         }
         view.background = selectedBackground()
@@ -257,6 +299,16 @@ class MainActivity : Activity() {
                 val h = v.tag as Holder
                 val f = items[position]
                 h.icon.text = iconFor(f)
+                val t = h.thumb
+                if (t != null) {
+                    val mime = f.type ?: ""
+                    if (!f.isDirectory && (mime.startsWith("image/") || mime.startsWith("video/"))) {
+                        loadThumb(f, t, mime.startsWith("video/"))
+                    } else {
+                        t.tag = null
+                        t.setImageDrawable(null)
+                    }
+                }
                 h.name.text = f.name ?: "?"
                 val size = if (f.isDirectory) "" else Formatter.formatShortFileSize(ctx, f.length())
                 val date = f.lastModified().takeIf { it > 0 }?.let { fmt.format(Date(it)) } ?: ""
@@ -336,7 +388,8 @@ class MainActivity : Activity() {
         menu.add(0, M_SORT, 4, "Ordenar")
         menu.add(0, M_VIEW, 5, "Modo de exibição")
         menu.add(0, M_THEME, 6, "Tema")
-        menu.add(0, M_REFRESH, 7, "Atualizar")
+        menu.add(0, M_ADD_SC, 7, "Adicionar atalho para esta pasta")
+        menu.add(0, M_REFRESH, 8, "Atualizar")
         return true
     }
 
@@ -345,6 +398,7 @@ class MainActivity : Activity() {
         val hasDir = stack.isNotEmpty()
         menu.findItem(M_NEW_DIR)?.isEnabled = hasDir
         menu.findItem(M_NEW_FILE)?.isEnabled = hasDir
+        menu.findItem(M_ADD_SC)?.isEnabled = hasDir
         return true
     }
 
@@ -380,6 +434,7 @@ class MainActivity : Activity() {
                     recreate()
                 }
             }
+            M_ADD_SC -> addShortcut()
             M_REFRESH -> refresh()
         }
         return true
@@ -605,6 +660,158 @@ class MainActivity : Activity() {
         }
     }
 
+    // -------------------------------------------------------------- atalhos
+
+    private fun renderShortcuts() {
+        chipBar.removeAllViews()
+        val list = ShortcutStore.load(this)
+        chipScroll.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
+        for (sc in list) {
+            val b = Button(this).apply {
+                text = "⭐ " + sc.name
+                textSize = 12f
+                setAllCaps(false)
+                minWidth = 0
+                minimumWidth = 0
+                setOnClickListener { openShortcut(sc) }
+                setOnLongClickListener { shortcutMenu(sc); true }
+            }
+            chipBar.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        }
+    }
+
+    private fun addShortcut() {
+        val cur = stack.lastOrNull()
+        val rootUri = prefs.getString(KEY_TREE, null)
+        if (cur == null || rootUri == null) {
+            toast("Escolha uma pasta primeiro")
+            return
+        }
+        val path = stack.drop(1).map { it.name ?: "" }
+        prompt("Nome do atalho", cur.name ?: "Pasta") { name ->
+            val list = ShortcutStore.load(this)
+            if (list.any { it.root == rootUri && it.path == path }) {
+                toast("Já existe um atalho para esta pasta")
+            } else {
+                list += Shortcut(name, rootUri, path)
+                ShortcutStore.save(this, list)
+                renderShortcuts()
+                toast("Atalho salvo")
+            }
+        }
+    }
+
+    private fun openShortcut(sc: Shortcut) {
+        val root = DocumentFile.fromTreeUri(this, Uri.parse(sc.root))
+        if (root == null || !root.canRead()) {
+            toast("Sem acesso a essa pasta. Escolha-a de novo no menu.")
+            return
+        }
+        Thread {
+            val newStack = arrayListOf(root)
+            var cur = root
+            var missing: String? = null
+            for (n in sc.path) {
+                val c = cur.findFile(n)
+                if (c == null || !c.isDirectory) {
+                    missing = n
+                    break
+                }
+                newStack.add(c)
+                cur = c
+            }
+            runOnUiThread {
+                prefs.edit().putString(KEY_TREE, sc.root).apply()
+                stack.clear()
+                stack.addAll(newStack)
+                clearSearch()
+                refresh()
+                if (missing != null) toast("Pasta \"$missing\" não encontrada; mostrando o mais próximo")
+            }
+        }.start()
+    }
+
+    private fun shortcutMenu(sc: Shortcut) {
+        AlertDialog.Builder(this)
+            .setTitle(sc.name)
+            .setItems(arrayOf("Renomear atalho", "Remover atalho")) { _, i ->
+                if (i == 0) {
+                    prompt("Renomear atalho", sc.name) { name ->
+                        val list = ShortcutStore.load(this)
+                        val idx = list.indexOfFirst { it.root == sc.root && it.path == sc.path }
+                        if (idx >= 0) {
+                            list[idx] = sc.copy(name = name)
+                            ShortcutStore.save(this, list)
+                            renderShortcuts()
+                        }
+                    }
+                } else {
+                    AlertDialog.Builder(this)
+                        .setMessage("Remover o atalho \"${sc.name}\"? A pasta em si não é apagada.")
+                        .setNegativeButton("Cancelar", null)
+                        .setPositiveButton("Remover") { _, _ ->
+                            val list = ShortcutStore.load(this)
+                            list.removeAll { it.root == sc.root && it.path == sc.path }
+                            ShortcutStore.save(this, list)
+                            renderShortcuts()
+                            toast("Atalho removido")
+                        }.show()
+                }
+            }.show()
+    }
+
+    // ---------------------------------------------------------- miniaturas
+
+    private fun loadThumb(f: DocumentFile, iv: ImageView, video: Boolean) {
+        val key = f.uri.toString()
+        iv.tag = key
+        val cached = thumbCache.get(key)
+        if (cached != null) {
+            iv.setImageBitmap(cached)
+            return
+        }
+        iv.setImageDrawable(null)
+        val uri = f.uri
+        try {
+            thumbPool.execute {
+                val bmp = decodeThumb(uri, video)
+                if (bmp != null) {
+                    thumbCache.put(key, bmp)
+                    runOnUiThread { if (iv.tag == key) iv.setImageBitmap(bmp) }
+                }
+            }
+        } catch (e: Exception) {
+            // pool encerrado (activity fechando)
+        }
+    }
+
+    private fun decodeThumb(uri: Uri, video: Boolean): Bitmap? {
+        val size = THUMB_PX
+        return try {
+            if (video) {
+                val r = MediaMetadataRetriever()
+                try {
+                    r.setDataSource(this, uri)
+                    val b = r.frameAtTime ?: return null
+                    val scale = size.toFloat() / maxOf(b.width, b.height)
+                    if (scale >= 1f) b
+                    else Bitmap.createScaledBitmap(b, (b.width * scale).toInt().coerceAtLeast(1), (b.height * scale).toInt().coerceAtLeast(1), true)
+                } finally {
+                    r.release()
+                }
+            } else {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (bounds.outWidth / (sample * 2) >= size && bounds.outHeight / (sample * 2) >= size) sample *= 2
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     // ----------------------------------------------------------------- util
 
     /** Roda [work] fora da thread de UI e mostra o resultado + atualiza a lista. */
@@ -646,6 +853,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQ_TREE = 1
+        const val THUMB_PX = 192
         const val KEY_TREE = "tree_uri"
         const val KEY_MODE = "view_mode"
         const val M_PICK = 1
@@ -656,6 +864,7 @@ class MainActivity : Activity() {
         const val M_VIEW = 6
         const val M_THEME = 7
         const val M_REFRESH = 8
+        const val M_ADD_SC = 9
         const val A_COPY = 101
         const val A_CUT = 102
         const val A_DELETE = 103
