@@ -4,19 +4,29 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.StateListDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.text.format.Formatter
+import android.view.ActionMode
+import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.MimeTypeMap
-import android.widget.ArrayAdapter
+import android.widget.AbsListView
+import android.widget.BaseAdapter
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.GridView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
@@ -28,31 +38,41 @@ import java.util.Locale
 
 /**
  * Gerenciador de arquivos baseado no Storage Access Framework.
- * Escolha uma pasta e navegue; toque longo num item abre o menu de ações.
+ * Toque longo seleciona (vários itens); toque num arquivo abre; tema e visualização no menu.
  */
 class MainActivity : Activity() {
 
     private enum class Sort(val label: String) { NOME("Nome"), TAMANHO("Tamanho"), DATA("Data") }
+    private enum class Mode(val label: String) {
+        LISTA("Lista detalhada"), COMPACTA("Lista compacta"), GRADE("Grade")
+    }
 
     private val prefs by lazy { getSharedPreferences("prefs", MODE_PRIVATE) }
     private val stack = ArrayList<DocumentFile>() // raiz ... pasta atual
     private var all: List<DocumentFile> = emptyList()
     private var shown: List<DocumentFile> = emptyList()
     private var sort = Sort.NOME
+    private var mode = Mode.LISTA
     private var filter = ""
 
     // "área de transferência" interna para copiar/mover
-    private var clip: DocumentFile? = null
+    private var clip: List<DocumentFile> = emptyList()
     private var clipParent: DocumentFile? = null
     private var clipCut = false
 
+    private var actionMode: ActionMode? = null
+
     private lateinit var searchBox: EditText
     private lateinit var pathView: TextView
-    private lateinit var list: ListView
+    private lateinit var container: FrameLayout
+    private lateinit var list: AbsListView
     private lateinit var emptyView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppTheme.apply(this)
         super.onCreate(savedInstanceState)
+
+        mode = runCatching { Mode.valueOf(prefs.getString(KEY_MODE, "") ?: "") }.getOrDefault(Mode.LISTA)
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         searchBox = EditText(this).apply {
@@ -67,21 +87,48 @@ class MainActivity : Activity() {
                 }
             })
         }
-        pathView = TextView(this).apply { setPadding(32, 8, 32, 16) }
+        pathView = TextView(this).apply { setPadding(dp(16), dp(4), dp(16), dp(8)) }
         emptyView = TextView(this).apply {
-            setPadding(32, 48, 32, 48)
+            setPadding(dp(16), dp(24), dp(16), dp(24))
             visibility = View.GONE
         }
-        list = ListView(this)
+        container = FrameLayout(this)
         val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
         val match = ViewGroup.LayoutParams.MATCH_PARENT
         root.addView(searchBox, match, wrap)
         root.addView(pathView, match, wrap)
         root.addView(emptyView, match, wrap)
-        root.addView(list, match, match)
+        root.addView(container, match, match)
         setContentView(root)
 
-        list.setOnItemClickListener { _, _, pos, _ ->
+        prefs.getString(KEY_TREE, null)?.let { saved ->
+            DocumentFile.fromTreeUri(this, Uri.parse(saved))?.takeIf { it.canRead() }?.let {
+                stack.add(it)
+            }
+        }
+        buildList()
+        refresh()
+    }
+
+    // ------------------------------------------------------- lista / grade
+
+    private fun buildList() {
+        actionMode?.finish()
+        container.removeAllViews()
+        val v: AbsListView = if (mode == Mode.GRADE) {
+            GridView(this).apply {
+                numColumns = GridView.AUTO_FIT
+                columnWidth = dp(104)
+                stretchMode = GridView.STRETCH_COLUMN_WIDTH
+                verticalSpacing = dp(4)
+                horizontalSpacing = dp(4)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }
+        } else ListView(this)
+
+        v.choiceMode = AbsListView.CHOICE_MODE_MULTIPLE_MODAL
+        v.setMultiChoiceModeListener(selectionListener)
+        v.setOnItemClickListener { _, _, pos, _ ->
             val item = shown[pos]
             if (item.isDirectory) {
                 stack.add(item)
@@ -91,17 +138,192 @@ class MainActivity : Activity() {
                 openFile(item)
             }
         }
-        list.setOnItemLongClickListener { _, _, pos, _ ->
-            showItemMenu(shown[pos])
-            true
-        }
+        container.addView(v, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        list = v
+        applyFilter()
+    }
 
-        prefs.getString(KEY_TREE, null)?.let { saved ->
-            DocumentFile.fromTreeUri(this, Uri.parse(saved))?.takeIf { it.canRead() }?.let {
-                stack.add(it)
+    private class Holder(val icon: TextView, val name: TextView, val sub: TextView?)
+
+    private fun selectedBackground() = StateListDrawable().apply {
+        addState(intArrayOf(android.R.attr.state_activated), ColorDrawable(0x553F8CFF))
+        addState(intArrayOf(), ColorDrawable(Color.TRANSPARENT))
+    }
+
+    private fun newItemView(): View {
+        fun text(sp: Float) = TextView(this).apply {
+            textSize = sp
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        val view: View
+        val holder: Holder
+        when (mode) {
+            Mode.LISTA -> {
+                val icon = text(24f).apply { gravity = Gravity.CENTER; setWidth(dp(40)) }
+                val name = text(16f)
+                val sub = text(12f).apply { alpha = 0.65f }
+                val col = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(name)
+                    addView(sub)
+                }
+                view = LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    addView(icon)
+                    addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                holder = Holder(icon, name, sub)
+            }
+            Mode.COMPACTA -> {
+                val icon = text(18f).apply { gravity = Gravity.CENTER; setWidth(dp(32)) }
+                val name = text(15f)
+                val sub = text(12f).apply { alpha = 0.65f; setPadding(dp(8), 0, 0, 0) }
+                view = LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(6), dp(12), dp(6))
+                    addView(icon)
+                    addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(sub)
+                }
+                holder = Holder(icon, name, sub)
+            }
+            Mode.GRADE -> {
+                val icon = text(40f).apply { gravity = Gravity.CENTER }
+                val name = text(12f).apply {
+                    gravity = Gravity.CENTER
+                    maxLines = 2
+                }
+                view = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(dp(6), dp(10), dp(6), dp(10))
+                    minimumHeight = dp(100)
+                    addView(icon, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    addView(name, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+                holder = Holder(icon, name, null)
             }
         }
-        refresh()
+        view.background = selectedBackground()
+        view.tag = holder
+        return view
+    }
+
+    private fun iconFor(f: DocumentFile): String {
+        if (f.isDirectory) return "📁"
+        val ext = (f.name ?: "").substringAfterLast('.', "").lowercase()
+        val mime = f.type ?: ""
+        return when {
+            mime.startsWith("image/") -> "🖼️"
+            mime.startsWith("video/") -> "🎬"
+            mime.startsWith("audio/") -> "🎵"
+            ext == "pdf" -> "📕"
+            ext in setOf("zip", "rar", "7z", "tar", "gz") -> "🗜️"
+            ext in setOf("apk") -> "📦"
+            mime.startsWith("text/") || Highlighter.supports(f.name ?: "") || ext in setOf("txt", "log", "csv") -> "📝"
+            else -> "📄"
+        }
+    }
+
+    private fun applyFilter() {
+        actionMode?.finish()
+        val q = filter.trim().lowercase()
+        val filtered = if (q.isEmpty()) all else all.filter { (it.name ?: "").lowercase().contains(q) }
+        val cmp: Comparator<DocumentFile> = when (sort) {
+            Sort.NOME -> compareBy<DocumentFile> { it.name?.lowercase() ?: "" }
+            Sort.TAMANHO -> compareByDescending<DocumentFile> { it.length() }
+            Sort.DATA -> compareByDescending<DocumentFile> { it.lastModified() }
+        }
+        shown = filtered.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.then(cmp))
+
+        emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
+        emptyView.text = when {
+            stack.isEmpty() -> "Use o menu para escolher uma pasta."
+            all.isEmpty() -> "Pasta vazia."
+            else -> "Nada encontrado."
+        }
+
+        val fmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+        val items = shown
+        val ctx = this
+        list.adapter = object : BaseAdapter() {
+            override fun getCount() = items.size
+            override fun getItem(position: Int) = items[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = convertView ?: newItemView()
+                val h = v.tag as Holder
+                val f = items[position]
+                h.icon.text = iconFor(f)
+                h.name.text = f.name ?: "?"
+                val size = if (f.isDirectory) "" else Formatter.formatShortFileSize(ctx, f.length())
+                val date = f.lastModified().takeIf { it > 0 }?.let { fmt.format(Date(it)) } ?: ""
+                h.sub?.text = if (mode == Mode.COMPACTA) size
+                else listOf(size, date).filter { it.isNotEmpty() }.joinToString("  ·  ")
+                return v
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ seleção
+
+    private val selectionListener = object : AbsListView.MultiChoiceModeListener {
+        override fun onItemCheckedStateChanged(mode: ActionMode, position: Int, id: Long, checked: Boolean) {
+            mode.title = "${list.checkedItemCount} selecionado(s)"
+            mode.invalidate()
+        }
+
+        override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+            actionMode = mode
+            menu.add(0, A_COPY, 0, "Copiar").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            menu.add(0, A_CUT, 1, "Mover").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            menu.add(0, A_DELETE, 2, "Excluir").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+            menu.add(0, A_SHARE, 3, "Compartilhar")
+            menu.add(0, A_ALL, 4, "Selecionar tudo")
+            menu.add(0, A_MORE, 5, "Mais ações…")
+            return true
+        }
+
+        override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+            menu.findItem(A_MORE)?.isVisible = list.checkedItemCount == 1
+            return true
+        }
+
+        override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+            if (item.itemId == A_ALL) {
+                for (i in shown.indices) list.setItemChecked(i, true)
+                return true
+            }
+            val sel = selected()
+            if (sel.isEmpty()) return true
+            when (item.itemId) {
+                A_COPY -> setClip(sel, false)
+                A_CUT -> setClip(sel, true)
+                A_DELETE -> deleteAll(sel)
+                A_SHARE -> share(sel)
+                A_MORE -> showItemMenu(sel[0])
+            }
+            mode.finish()
+            return true
+        }
+
+        override fun onDestroyActionMode(mode: ActionMode) {
+            actionMode = null
+        }
+    }
+
+    private fun selected(): List<DocumentFile> {
+        val arr = list.checkedItemPositions ?: return emptyList()
+        val res = ArrayList<DocumentFile>()
+        for (i in 0 until arr.size()) {
+            if (arr.valueAt(i)) {
+                val p = arr.keyAt(i)
+                if (p in shown.indices) res += shown[p]
+            }
+        }
+        return res
     }
 
     // ---------------------------------------------------------------- menu
@@ -112,12 +334,14 @@ class MainActivity : Activity() {
         menu.add(0, M_NEW_FILE, 2, "Novo arquivo")
         menu.add(0, M_PASTE, 3, "Colar").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
         menu.add(0, M_SORT, 4, "Ordenar")
-        menu.add(0, M_REFRESH, 5, "Atualizar")
+        menu.add(0, M_VIEW, 5, "Modo de exibição")
+        menu.add(0, M_THEME, 6, "Tema")
+        menu.add(0, M_REFRESH, 7, "Atualizar")
         return true
     }
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        menu.findItem(M_PASTE)?.isVisible = clip != null
+        menu.findItem(M_PASTE)?.isVisible = clip.isNotEmpty()
         val hasDir = stack.isNotEmpty()
         menu.findItem(M_NEW_DIR)?.isEnabled = hasDir
         menu.findItem(M_NEW_FILE)?.isEnabled = hasDir
@@ -140,18 +364,33 @@ class MainActivity : Activity() {
                 } else toast("Falha ao criar arquivo")
             }
             M_PASTE -> paste()
-            M_SORT -> {
-                val labels = Sort.values().map { it.label }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Ordenar por")
-                    .setSingleChoiceItems(labels, sort.ordinal) { d, which ->
-                        sort = Sort.values()[which]
-                        d.dismiss()
-                        applyFilter()
-                    }.show()
+            M_SORT -> choose("Ordenar por", Sort.values().map { it.label }, sort.ordinal) {
+                sort = Sort.values()[it]
+                applyFilter()
+            }
+            M_VIEW -> choose("Modo de exibição", Mode.values().map { it.label }, mode.ordinal) {
+                mode = Mode.values()[it]
+                prefs.edit().putString(KEY_MODE, mode.name).apply()
+                buildList()
+            }
+            M_THEME -> {
+                val modes = listOf("system", "light", "dark")
+                choose("Tema", listOf("Seguir o sistema", "Claro", "Escuro"), modes.indexOf(AppTheme.mode(this))) {
+                    AppTheme.setMode(this, modes[it])
+                    recreate()
+                }
             }
             M_REFRESH -> refresh()
         }
         return true
+    }
+
+    private fun choose(title: String, labels: List<String>, checked: Int, onPick: (Int) -> Unit) {
+        AlertDialog.Builder(this).setTitle(title)
+            .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
+                d.dismiss()
+                onPick(which)
+            }.show()
     }
 
     @Deprecated("Deprecated in Java")
@@ -183,7 +422,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (stack.isNotEmpty()) refresh() // pode ter sido editado
+        if (stack.isNotEmpty() && ::list.isInitialized) refresh() // pode ter sido editado
     }
 
     // ------------------------------------------------------------ listagem
@@ -206,43 +445,6 @@ class MainActivity : Activity() {
         invalidateOptionsMenu()
     }
 
-    private fun applyFilter() {
-        val q = filter.trim().lowercase()
-        val filtered = if (q.isEmpty()) all else all.filter { (it.name ?: "").lowercase().contains(q) }
-        val cmp: Comparator<DocumentFile> = when (sort) {
-            Sort.NOME -> compareBy<DocumentFile> { it.name?.lowercase() ?: "" }
-            Sort.TAMANHO -> compareByDescending<DocumentFile> { it.length() }
-            Sort.DATA -> compareByDescending<DocumentFile> { it.lastModified() }
-        }
-        shown = filtered.sortedWith(compareBy<DocumentFile> { !it.isDirectory }.then(cmp))
-
-        emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
-        emptyView.text = when {
-            stack.isEmpty() -> "Use o menu para escolher uma pasta."
-            all.isEmpty() -> "Pasta vazia."
-            else -> "Nada encontrado."
-        }
-
-        val fmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-        list.adapter = object : ArrayAdapter<DocumentFile>(
-            this, android.R.layout.simple_list_item_2, shown
-        ) {
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v = convertView ?: layoutInflater.inflate(
-                    android.R.layout.simple_list_item_2, parent, false
-                )
-                val f = getItem(position)!!
-                v.findViewById<TextView>(android.R.id.text1).text =
-                    (if (f.isDirectory) "📁 " else "📄 ") + (f.name ?: "?")
-                val date = f.lastModified().takeIf { it > 0 }?.let { fmt.format(Date(it)) } ?: ""
-                val size = if (f.isDirectory) "" else Formatter.formatShortFileSize(context, f.length())
-                v.findViewById<TextView>(android.R.id.text2).text =
-                    listOf(size, date).filter { it.isNotEmpty() }.joinToString("  ·  ")
-                return v
-            }
-        }
-    }
-
     // ---------------------------------------------------------------- ações
 
     private fun showItemMenu(f: DocumentFile) {
@@ -250,12 +452,9 @@ class MainActivity : Activity() {
         if (!f.isDirectory) {
             actions += "Abrir" to { openFile(f) }
             actions += "Editar como texto" to { openEditor(f) }
-            actions += "Compartilhar" to { share(f) }
+            actions += "Compartilhar" to { share(listOf(f)) }
         }
         actions += "Renomear" to { rename(f) }
-        actions += "Copiar" to { setClip(f, false) }
-        actions += "Mover" to { setClip(f, true) }
-        actions += "Excluir" to { delete(f) }
         actions += "Detalhes" to { details(f) }
         AlertDialog.Builder(this)
             .setTitle(f.name)
@@ -270,7 +469,8 @@ class MainActivity : Activity() {
         try {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            toast("Nenhum app para abrir este arquivo. Use \"Editar como texto\" se for texto.")
+            // sem app para o tipo: tenta abrir no editor de texto
+            openEditor(file)
         }
     }
 
@@ -282,11 +482,21 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun share(file: DocumentFile) {
-        val send = Intent(Intent.ACTION_SEND)
-            .setType(file.type ?: "*/*")
-            .putExtra(Intent.EXTRA_STREAM, file.uri)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private fun share(files: List<DocumentFile>) {
+        val only = files.filter { !it.isDirectory }
+        if (only.isEmpty()) {
+            toast("Pastas não podem ser compartilhadas")
+            return
+        }
+        val send = if (only.size == 1) {
+            Intent(Intent.ACTION_SEND)
+                .setType(only[0].type ?: "*/*")
+                .putExtra(Intent.EXTRA_STREAM, only[0].uri)
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE)
+                .setType("*/*")
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(only.map { it.uri }))
+        }.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(Intent.createChooser(send, "Compartilhar"))
     }
 
@@ -297,14 +507,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun delete(f: DocumentFile) {
+    private fun deleteAll(files: List<DocumentFile>) {
+        val msg = if (files.size == 1) "Excluir \"${files[0].name}\"" + if (files[0].isDirectory) " e todo o conteúdo?" else "?"
+        else "Excluir ${files.size} itens (pastas incluem todo o conteúdo)?"
         AlertDialog.Builder(this)
             .setTitle("Excluir")
-            .setMessage("Excluir \"${f.name}\"" + if (f.isDirectory) " e todo o conteúdo?" else "?")
+            .setMessage(msg)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Excluir") { _, _ ->
-                toast(if (f.delete()) "Excluído" else "Falha ao excluir")
-                refresh()
+                background { files.map { it.delete() }.all { it } }
             }.show()
     }
 
@@ -324,43 +535,43 @@ class MainActivity : Activity() {
 
     // ----------------------------------------------------- copiar/mover/colar
 
-    private fun setClip(f: DocumentFile, cut: Boolean) {
-        clip = f
+    private fun setClip(files: List<DocumentFile>, cut: Boolean) {
+        clip = files
         clipParent = stack.lastOrNull()
         clipCut = cut
         invalidateOptionsMenu()
-        toast(if (cut) "Pronto para mover. Abra a pasta destino e use Colar." else "Copiado. Abra a pasta destino e use Colar.")
+        toast("${files.size} item(ns) " + (if (cut) "para mover" else "copiado(s)") + ". Abra a pasta destino e use Colar.")
     }
 
     private fun paste() {
-        val src = clip ?: return
+        val items = clip
         val dest = stack.lastOrNull() ?: return
         val cut = clipCut
         val parent = clipParent
-        toast("Trabalhando…")
-        Thread {
-            var ok = false
-            try {
-                if (cut && parent != null) {
-                    ok = try {
-                        DocumentsContract.moveDocument(contentResolver, src.uri, parent.uri, dest.uri) != null
-                    } catch (e: Exception) {
-                        false
+        background {
+            var allOk = true
+            for (src in items) {
+                var ok = false
+                try {
+                    if (cut && parent != null) {
+                        ok = try {
+                            DocumentsContract.moveDocument(contentResolver, src.uri, parent.uri, dest.uri) != null
+                        } catch (e: Exception) {
+                            false
+                        }
                     }
+                    if (!ok) {
+                        ok = copyRecursive(src, dest)
+                        if (ok && cut) src.delete()
+                    }
+                } catch (e: Exception) {
+                    ok = false
                 }
-                if (!ok) {
-                    ok = copyRecursive(src, dest)
-                    if (ok && cut) src.delete()
-                }
-            } catch (e: Exception) {
-                ok = false
+                allOk = allOk && ok
             }
-            runOnUiThread {
-                if (ok && cut) { clip = null; clipParent = null }
-                toast(if (ok) "Concluído" else "Falha na operação")
-                refresh()
-            }
-        }.start()
+            if (allOk && cut) runOnUiThread { clip = emptyList(); clipParent = null }
+            allOk
+        }
     }
 
     private fun copyRecursive(src: DocumentFile, destDir: DocumentFile): Boolean {
@@ -396,6 +607,20 @@ class MainActivity : Activity() {
 
     // ----------------------------------------------------------------- util
 
+    /** Roda [work] fora da thread de UI e mostra o resultado + atualiza a lista. */
+    private fun background(work: () -> Boolean) {
+        toast("Trabalhando…")
+        Thread {
+            val ok = try { work() } catch (e: Exception) { false }
+            runOnUiThread {
+                toast(if (ok) "Concluído" else "Falha em parte da operação")
+                refresh()
+            }
+        }.start()
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
     private fun guessMime(name: String): String {
         val ext = name.substringAfterLast('.', "").lowercase()
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
@@ -422,11 +647,20 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_TREE = 1
         const val KEY_TREE = "tree_uri"
+        const val KEY_MODE = "view_mode"
         const val M_PICK = 1
         const val M_NEW_DIR = 2
         const val M_NEW_FILE = 3
         const val M_PASTE = 4
         const val M_SORT = 5
-        const val M_REFRESH = 6
+        const val M_VIEW = 6
+        const val M_THEME = 7
+        const val M_REFRESH = 8
+        const val A_COPY = 101
+        const val A_CUT = 102
+        const val A_DELETE = 103
+        const val A_SHARE = 104
+        const val A_ALL = 105
+        const val A_MORE = 106
     }
 }
