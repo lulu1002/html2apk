@@ -85,12 +85,25 @@ object DownloadRepository {
     }
 
     fun remove(id: String) {
+        // Se o arquivo está na pasta privada, a lista é o único acesso a ele: apaga junto
+        val path = _items.value.firstOrNull { it.id == id }?.path
+        if (path != null) {
+            scope.launch {
+                try {
+                    File(path).delete()
+                } catch (_: Exception) {
+                }
+            }
+        }
         _items.update { list -> list.filterNot { it.id == id } }
         persist()
     }
 
-    fun clearFinished() {
-        _items.update { list -> list.filter { it.status == Status.RUNNING || it.status == Status.QUEUED } }
+    /** Remove da lista só erros e cancelados (concluídos você remove um a um). */
+    fun clearFailed() {
+        _items.update { list ->
+            list.filter { it.status == Status.RUNNING || it.status == Status.QUEUED || it.status == Status.DONE }
+        }
         persist()
     }
 
@@ -128,7 +141,7 @@ object DownloadRepository {
 
             val saved = MediaSaver.save(ctx, file)
             mutate(item.id) {
-                it.copy(status = Status.DONE, progress = 1f, fileUri = saved.uri, mime = saved.mime)
+                it.copy(status = Status.DONE, progress = 1f, fileUri = saved.uri, mime = saved.mime, path = saved.path)
             }
         } catch (e: Exception) {
             if (canceled.remove(item.id)) {

@@ -8,7 +8,7 @@ App Android (Kotlin + Jetpack Compose) que baixa vídeo/áudio de links usando y
 - Vídeo (melhor, 1080p, 720p, 480p, 360p) ou áudio (MP3, M4A)
 - Fila (2 simultâneos), progresso, cancelar, histórico, abrir arquivo
 - Serviço em primeiro plano com notificação
-- Salva em Downloads/VidGrab
+- Pasta privada (padrão): os arquivos ficam dentro do app, com `.nomedia`, e não aparecem na galeria. Dá para desligar nos Ajustes e salvar em Downloads/VidGrab
 - Atualiza o yt-dlp sozinho (1x/dia) e manualmente nos Ajustes
 
 ## Compilar no GitHub Actions

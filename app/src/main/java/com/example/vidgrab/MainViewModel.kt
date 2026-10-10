@@ -21,12 +21,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var error by mutableStateOf<String?>(null)
     var updating by mutableStateOf(false)
     var engineVersion by mutableStateOf("")
+    var privateDir by mutableStateOf(AppSettings.isPrivate(app))
 
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val downloads = DownloadRepository.items
 
     init {
         refreshVersion()
+    }
+
+    fun clearUrl() {
+        url = ""
+        error = null
+        preview = null
+    }
+
+    fun setPrivateDir(value: Boolean) {
+        privateDir = value
+        AppSettings.setPrivate(getApplication(), value)
     }
 
     fun onShared(text: String) {

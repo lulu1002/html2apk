@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -147,7 +148,14 @@ fun DownloadTab(vm: MainViewModel, goToDownloads: () -> Unit) {
             label = { Text("Link do vídeo") },
             singleLine = true,
             trailingIcon = {
-                TextButton(onClick = { clip.getText()?.text?.let { vm.url = it } }) { Text("Colar") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (vm.url.isNotEmpty()) {
+                        IconButton(onClick = { vm.clearUrl() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Limpar link")
+                        }
+                    }
+                    TextButton(onClick = { clip.getText()?.text?.let { vm.url = it } }) { Text("Colar") }
+                }
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { vm.analyze() })
@@ -205,7 +213,7 @@ fun DownloadsTab(list: List<DownloadItem>) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Downloads", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                TextButton(onClick = { DownloadRepository.clearFinished() }) { Text("Limpar") }
+                TextButton(onClick = { DownloadRepository.clearFailed() }) { Text("Limpar falhas") }
             }
         }
         items(list, key = { it.id }) { DownloadCard(it) }
@@ -235,7 +243,10 @@ private fun DownloadCard(item: DownloadItem) {
                         val eta = if (item.eta > 0) " • ${item.eta}s restantes" else ""
                         Text("${(item.progress * 100).toInt()}%$eta", style = MaterialTheme.typography.bodySmall)
                     }
-                    Status.DONE -> Text("Concluído • Downloads/VidGrab", style = MaterialTheme.typography.bodySmall)
+                    Status.DONE -> Text(
+                        if (item.path != null) "Concluído • pasta privada" else "Concluído • Downloads/VidGrab",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Status.ERROR -> Text(item.error ?: "Erro", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     Status.CANCELED -> Text("Cancelado", style = MaterialTheme.typography.bodySmall)
                 }
@@ -249,7 +260,7 @@ private fun DownloadCard(item: DownloadItem) {
                         TextButton(onClick = { openFile(ctx, item) }) { Text("Abrir") }
                     }
                     IconButton(onClick = { DownloadRepository.remove(item.id) }) {
-                        Icon(Icons.Default.Delete, "Remover da lista")
+                        Icon(Icons.Default.Delete, if (item.path != null) "Excluir arquivo" else "Remover da lista")
                     }
                 }
                 else -> IconButton(onClick = { DownloadRepository.remove(item.id) }) {
@@ -276,7 +287,24 @@ fun SettingsTab(vm: MainViewModel) {
             "Se algum site parar de funcionar, atualize o yt-dlp. O app também tenta atualizar sozinho 1x por dia.",
             style = MaterialTheme.typography.bodySmall
         )
-        Text("Os arquivos ficam em Downloads/VidGrab.", style = MaterialTheme.typography.bodySmall)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Pasta privada", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (vm.privateDir)
+                        "Os arquivos ficam só dentro do app: não aparecem na galeria nem em outros apps. Excluir da lista apaga o arquivo, e desinstalar o app também."
+                    else
+                        "Os arquivos vão para Downloads/VidGrab e aparecem na galeria.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = vm.privateDir, onCheckedChange = { vm.setPrivateDir(it) })
+        }
+        Text("Vale para os próximos downloads.", style = MaterialTheme.typography.bodySmall)
         Text(
             "Dica: no navegador ou em outro app, use Compartilhar → VidGrab para analisar o link direto.",
             style = MaterialTheme.typography.bodySmall

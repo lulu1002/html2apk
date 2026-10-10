@@ -69,7 +69,8 @@ data class DownloadItem(
     val eta: Long = 0,
     val fileUri: String? = null,
     val mime: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val path: String? = null // preenchido só quando salvo na pasta privada
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -81,6 +82,7 @@ data class DownloadItem(
         put("fileUri", fileUri ?: JSONObject.NULL)
         put("mime", mime ?: JSONObject.NULL)
         put("error", error ?: JSONObject.NULL)
+        put("path", path ?: JSONObject.NULL)
     }
 
     companion object {
@@ -95,7 +97,8 @@ data class DownloadItem(
             status = Status.valueOf(o.getString("status")),
             fileUri = o.str("fileUri"),
             mime = o.str("mime"),
-            error = o.str("error")
+            error = o.str("error"),
+            path = o.str("path")
         )
     }
 }
