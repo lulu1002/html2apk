@@ -13,6 +13,9 @@ import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.StateListDrawable
@@ -333,6 +336,7 @@ class MainActivity : Activity() {
             menu.add(0, A_CUT, 1, "Mover").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             menu.add(0, A_DELETE, 2, "Excluir").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
             menu.add(0, A_SHARE, 3, "Compartilhar")
+            menu.add(0, A_ZIP, 4, "Compactar em ZIP")
             menu.add(0, A_ALL, 4, "Selecionar tudo")
             menu.add(0, A_MORE, 5, "Mais ações…")
             return true
@@ -355,6 +359,7 @@ class MainActivity : Activity() {
                 A_CUT -> setClip(sel, true)
                 A_DELETE -> deleteAll(sel)
                 A_SHARE -> share(sel)
+                A_ZIP -> zipFiles(sel)
                 A_MORE -> showItemMenu(sel[0])
             }
             mode.finish()
@@ -508,6 +513,10 @@ class MainActivity : Activity() {
             actions += "Abrir" to { openFile(f) }
             actions += "Editar como texto" to { openEditor(f) }
             actions += "Compartilhar" to { share(listOf(f)) }
+            if ((f.name ?: "").endsWith(".zip", ignoreCase = true)) {
+                actions += "Ver conteúdo do ZIP" to { listZip(f) }
+                actions += "Extrair aqui" to { extractZip(f) }
+            }
         }
         actions += "Renomear" to { rename(f) }
         actions += "Detalhes" to { details(f) }
@@ -658,6 +667,126 @@ class MainActivity : Activity() {
             if (dir.findFile(candidate) == null) return candidate
             i++
         }
+    }
+
+    // ------------------------------------------------------------------ ZIP
+
+    private fun listZip(zip: DocumentFile) {
+        Thread {
+            val sb = StringBuilder()
+            var n = 0
+            try {
+                contentResolver.openInputStream(zip.uri)?.use { raw ->
+                    ZipInputStream(raw.buffered()).use { zis ->
+                        var e = zis.nextEntry
+                        while (e != null) {
+                            if (n < 500) {
+                                sb.append(e.name)
+                                if (!e.isDirectory && e.size >= 0) {
+                                    sb.append("  (").append(Formatter.formatShortFileSize(this, e.size)).append(")")
+                                }
+                                sb.append('\n')
+                            }
+                            n++
+                            e = zis.nextEntry
+                        }
+                    }
+                }
+                if (n > 500) sb.append("… e mais ${n - 500} item(ns)")
+            } catch (ex: Exception) {
+                sb.append("Erro ao ler o ZIP: ${ex.message}")
+            }
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle("${zip.name} — $n item(ns)")
+                    .setMessage(sb.toString())
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun extractZip(zip: DocumentFile) {
+        val parent = stack.lastOrNull() ?: return
+        val base = (zip.name ?: "arquivo").let {
+            if (it.endsWith(".zip", ignoreCase = true)) it.dropLast(4) else it
+        }
+        background {
+            val dest = parent.createDirectory(uniqueName(parent, base)) ?: return@background false
+            val dirCache = HashMap<String, DocumentFile>()
+            var ok = true
+            val input = contentResolver.openInputStream(zip.uri) ?: return@background false
+            input.use { raw ->
+                ZipInputStream(raw.buffered()).use { zis ->
+                    var e = zis.nextEntry
+                    while (e != null) {
+                        ok = writeZipEntry(dest, dirCache, e, zis) && ok
+                        zis.closeEntry()
+                        e = zis.nextEntry
+                    }
+                }
+            }
+            ok
+        }
+    }
+
+    private fun writeZipEntry(
+        dest: DocumentFile, cache: HashMap<String, DocumentFile>, entry: ZipEntry, zis: ZipInputStream
+    ): Boolean {
+        val parts = entry.name.replace('\\', '/').split('/').filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return true
+        // proteção contra "zip slip": ignora caminhos com . ou ..
+        if (parts.any { it == ".." || it == "." }) return false
+        val dirParts = if (entry.isDirectory) parts else parts.dropLast(1)
+        var dir = dest
+        var key = ""
+        for (p in dirParts) {
+            key += "/$p"
+            dir = cache[key] ?: (dir.createDirectory(p) ?: return false).also { cache[key] = it }
+        }
+        if (entry.isDirectory) return true
+        val name = uniqueName(dir, parts.last())
+        val f = dir.createFile(guessMime(name), name) ?: return false
+        contentResolver.openOutputStream(f.uri, "w")?.use { zis.copyTo(it) } ?: return false
+        return true
+    }
+
+    private fun zipFiles(files: List<DocumentFile>) {
+        val parent = stack.lastOrNull() ?: return
+        val suggestion = (if (files.size == 1) files[0].name else "arquivos") + ".zip"
+        prompt("Nome do ZIP", suggestion) { typed ->
+            val name = if (typed.endsWith(".zip", ignoreCase = true)) typed else "$typed.zip"
+            background {
+                val out = parent.createFile("application/zip", uniqueName(parent, name)) ?: return@background false
+                var ok = true
+                val os = contentResolver.openOutputStream(out.uri, "w") ?: return@background false
+                os.use { raw ->
+                    ZipOutputStream(raw.buffered()).use { zos ->
+                        for (f in files) ok = addToZip(zos, f, f.name ?: "item") && ok
+                    }
+                }
+                ok
+            }
+        }
+    }
+
+    private fun addToZip(zos: ZipOutputStream, f: DocumentFile, path: String): Boolean {
+        if (f.isDirectory) {
+            zos.putNextEntry(ZipEntry("$path/"))
+            zos.closeEntry()
+            var ok = true
+            for (c in f.listFiles()) ok = addToZip(zos, c, "$path/${c.name ?: "item"}") && ok
+            return ok
+        }
+        zos.putNextEntry(ZipEntry(path))
+        val input = contentResolver.openInputStream(f.uri)
+        if (input == null) {
+            zos.closeEntry()
+            return false
+        }
+        input.use { it.copyTo(zos) }
+        zos.closeEntry()
+        return true
     }
 
     // -------------------------------------------------------------- atalhos
@@ -871,5 +1000,6 @@ class MainActivity : Activity() {
         const val A_SHARE = 104
         const val A_ALL = 105
         const val A_MORE = 106
+        const val A_ZIP = 107
     }
 }

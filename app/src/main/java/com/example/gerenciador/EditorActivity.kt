@@ -25,7 +25,7 @@ import android.widget.Toast
 /** Editor de texto: realce de sintaxe, localizar/substituir, salvar no mesmo arquivo (SAF). */
 class EditorActivity : Activity() {
 
-    private lateinit var editor: EditText
+    private lateinit var editor: LineNumberEditText
     private lateinit var findBar: LinearLayout
     private lateinit var findInput: EditText
     private lateinit var replInput: EditText
@@ -38,6 +38,13 @@ class EditorActivity : Activity() {
     private var textSize = 14f
     private var dark = false
     private var fileName = ""
+
+    // histórico de desfazer/refazer
+    private class Edit(var start: Int, var removed: String, var inserted: String)
+    private val undoStack = ArrayList<Edit>()
+    private val redoStack = ArrayList<Edit>()
+    private var applying = false
+    private var pendingRemoved = ""
 
     private val handler = Handler(Looper.getMainLooper())
     private val highlightTask = Runnable { highlight() }
@@ -58,17 +65,24 @@ class EditorActivity : Activity() {
         val wrapH = ViewGroup.LayoutParams.WRAP_CONTENT
         val match = ViewGroup.LayoutParams.MATCH_PARENT
 
-        editor = EditText(this).apply {
+        editor = LineNumberEditText(this).apply {
             typeface = Typeface.MONOSPACE
             gravity = Gravity.TOP or Gravity.START
             setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
             background = null
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                    if (!loading && !applying && s != null) {
+                        pendingRemoved = s.subSequence(start, start + count).toString()
+                    }
+                }
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    if (!loading && !applying && s != null) {
+                        record(start, pendingRemoved, s.subSequence(start, start + count).toString())
+                    }
+                }
                 override fun afterTextChanged(s: Editable?) {
                     if (loading) return
                     if (!dirty) {
@@ -106,12 +120,80 @@ class EditorActivity : Activity() {
             return
         }
         loading = false
+        undoStack.clear()
+        redoStack.clear()
         highlight()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
+    }
+
+    // ------------------------------------------------------ desfazer / refazer
+
+    private fun record(start: Int, removed: String, inserted: String) {
+        if (removed.isEmpty() && inserted.isEmpty()) return
+        redoStack.clear()
+        val last = undoStack.lastOrNull()
+        if (last != null) {
+            // digitação contínua vira um único passo
+            if (last.removed.isEmpty() && removed.isEmpty() &&
+                start == last.start + last.inserted.length &&
+                !inserted.contains('\n') && last.inserted.length < 50
+            ) {
+                last.inserted += inserted
+                return
+            }
+            // backspace contínuo
+            if (last.inserted.isEmpty() && inserted.isEmpty() && start + removed.length == last.start) {
+                last.start = start
+                last.removed = removed + last.removed
+                return
+            }
+            // delete contínuo
+            if (last.inserted.isEmpty() && inserted.isEmpty() && start == last.start) {
+                last.removed += removed
+                return
+            }
+        }
+        undoStack.add(Edit(start, removed, inserted))
+        if (undoStack.size > 1000) undoStack.removeAt(0)
+    }
+
+    private fun undo() {
+        val ed = undoStack.removeLastOrNull() ?: return
+        applying = true
+        try {
+            editor.text.replace(ed.start, ed.start + ed.inserted.length, ed.removed)
+        } finally {
+            applying = false
+        }
+        editor.setSelection((ed.start + ed.removed.length).coerceAtMost(editor.text.length))
+        redoStack.add(ed)
+        afterHistoryChange()
+    }
+
+    private fun redo() {
+        val ed = redoStack.removeLastOrNull() ?: return
+        applying = true
+        try {
+            editor.text.replace(ed.start, ed.start + ed.removed.length, ed.inserted)
+        } finally {
+            applying = false
+        }
+        editor.setSelection((ed.start + ed.inserted.length).coerceAtMost(editor.text.length))
+        undoStack.add(ed)
+        afterHistoryChange()
+    }
+
+    private fun afterHistoryChange() {
+        if (!dirty) {
+            dirty = true
+            updateTitle()
+        }
+        handler.removeCallbacks(highlightTask)
+        handler.postDelayed(highlightTask, 300)
     }
 
     // ------------------------------------------------------ localizar / substituir
@@ -282,7 +364,10 @@ class EditorActivity : Activity() {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, M_SAVE, 0, "Salvar").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-        menu.add(0, M_FIND, 1, "Localizar e substituir").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+        menu.add(0, M_UNDO, 1, "↶ Desfazer").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+        menu.add(0, M_REDO, 2, "↷ Refazer").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+        menu.add(0, M_FIND, 3, "Localizar e substituir").setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+        menu.add(0, M_NUMS, 4, "Números de linha: ligados")
         menu.add(0, M_WRAP, 2, "Quebra de linha: ligada")
         menu.add(0, M_BIGGER, 3, "Fonte maior")
         menu.add(0, M_SMALLER, 4, "Fonte menor")
@@ -295,6 +380,12 @@ class EditorActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             M_SAVE -> save()
+            M_UNDO -> undo()
+            M_REDO -> redo()
+            M_NUMS -> {
+                editor.showNumbers = !editor.showNumbers
+                item.title = "Números de linha: " + if (editor.showNumbers) "ligados" else "desligados"
+            }
             M_FIND -> toggleFindBar(findBar.visibility != View.VISIBLE)
             M_WRAP -> {
                 wrap = !wrap
@@ -337,6 +428,7 @@ class EditorActivity : Activity() {
     private fun setSize(sp: Float) {
         textSize = sp.coerceIn(8f, 32f)
         editor.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+        editor.post { editor.updateGutter() }
     }
 
     @Deprecated("Deprecated in Java")
@@ -367,5 +459,8 @@ class EditorActivity : Activity() {
         private const val M_TOP = 6
         private const val M_END = 7
         private const val M_LINE = 8
+        private const val M_UNDO = 9
+        private const val M_REDO = 10
+        private const val M_NUMS = 11
     }
 }
