@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "gerenciador-arquivos"
+rootProject.name = "VidGrab"
 include(":app")
