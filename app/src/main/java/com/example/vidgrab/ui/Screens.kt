@@ -302,7 +302,7 @@ fun SettingsTab(vm: MainViewModel) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            Switch(checked = vm.privateDir, onCheckedChange = { vm.setPrivateDir(it) })
+            Switch(checked = vm.privateDir, onCheckedChange = { vm.changePrivateDir(it) })
         }
         Text("Vale para os próximos downloads.", style = MaterialTheme.typography.bodySmall)
         Text(

@@ -36,7 +36,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         preview = null
     }
 
-    fun setPrivateDir(value: Boolean) {
+    fun changePrivateDir(value: Boolean) {
         privateDir = value
         AppSettings.setPrivate(getApplication(), value)
     }
