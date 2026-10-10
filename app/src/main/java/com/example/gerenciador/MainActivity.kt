@@ -293,7 +293,7 @@ class MainActivity : Activity() {
         val fmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
         val items = shown
         val ctx = this
-        list.adapter = object : BaseAdapter() {
+        val itemAdapter = object : BaseAdapter() {
             override fun getCount() = items.size
             override fun getItem(position: Int) = items[position]
             override fun getItemId(position: Int) = position.toLong()
@@ -320,6 +320,7 @@ class MainActivity : Activity() {
                 return v
             }
         }
+        list.setAdapter(itemAdapter)
     }
 
     // ------------------------------------------------------------ seleção
@@ -837,8 +838,9 @@ class MainActivity : Activity() {
             return
         }
         Thread {
-            val newStack = arrayListOf(root)
-            var cur = root
+            val start: DocumentFile = root
+            val newStack = arrayListOf(start)
+            var cur: DocumentFile = start
             var missing: String? = null
             for (n in sc.path) {
                 val c = cur.findFile(n)
