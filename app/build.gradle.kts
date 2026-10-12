@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.netmonitor"
+    namespace = "com.example.gerenciador"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.netmonitor"
-        minSdk = 26
+        applicationId = "com.example.gerenciador"
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -20,7 +20,6 @@ android {
             isMinifyEnabled = false
         }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -28,4 +27,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    implementation("androidx.core:core:1.13.1")
 }

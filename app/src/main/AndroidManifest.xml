@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Necessario para descobrir o nome dos apps dono de cada conexao (Android 11+) -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- Acesso direto ao armazenamento (Downloads, raiz, cartão SD) -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
 
     <application
-        android:allowBackup="false"
-        android:icon="@android:drawable/ic_menu_compass"
-        android:label="Monitor de Rede"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
+        android:allowBackup="true"
+        android:requestLegacyExternalStorage="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Material.Light.DarkActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -20,13 +25,28 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".MonitorVpnService"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+        <activity
+            android:name=".EditorActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
-                <action android:name="android.net.VpnService" />
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="text/*" />
             </intent-filter>
-        </service>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
+
 </manifest>
