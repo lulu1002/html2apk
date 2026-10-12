@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.adblockdns"
+    namespace = "com.vpsmanager"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.adblockdns"
+        applicationId = "com.vpsmanager"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 1
+        versionName = "0.1.0"
     }
 
     buildTypes {
@@ -27,6 +27,12 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/versions/**"
+        }
+    }
 }
 
 dependencies {
@@ -35,5 +41,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.github.mwiede:jsch:0.2.20")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
 }

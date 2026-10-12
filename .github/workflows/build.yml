@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: adblock-dns-debug
+          name: vps-manager-debug
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Publicar na Release (só em tags v*)
