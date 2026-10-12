@@ -3,12 +3,15 @@ package com.vpsmanager
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.SftpException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,6 +58,10 @@ class SftpState {
     var started = false
     /** Vídeo em tela cheia (a HostScreen esconde as abas enquanto isso). */
     var fullscreen by mutableStateOf(false)
+    /** Edição de texto em andamento / com alterações não salvas (o FileViewer usa para confirmar a saída). */
+    var editing by mutableStateOf(false)
+    var dirty by mutableStateOf(false)
+    var confirmDiscard by mutableStateOf(false)
 
     private var session: Session? = null
     private var sftp: ChannelSftp? = null
@@ -135,6 +143,35 @@ class SftpState {
                 if (f.isDir) ch.rmdir(p) else ch.rm(p)
             }
             message = "Excluído: ${f.name}"
+        } finally {
+            busy = false
+        }
+        open(h, path)
+    }
+
+    /** Sobrescreve [remote] no próprio lugar (mantém dono e permissões). */
+    suspend fun writeFile(h: Host, remote: String, data: ByteArray) = withContext(Dispatchers.IO) {
+        ensure(h)
+        val ch = newChannel()
+        try {
+            ch.put(ByteArrayInputStream(data), remote, ChannelSftp.OVERWRITE)
+        } finally {
+            ch.disconnect()
+        }
+    }
+
+    /** Cria um arquivo vazio (recusa se já existir). */
+    suspend fun createFile(h: Host, name: String) {
+        busy = true
+        try {
+            withContext(Dispatchers.IO) {
+                val ch = ensure(h)
+                val p = joinPath(path, name)
+                val exists = try { ch.stat(p); true } catch (_: SftpException) { false }
+                if (exists) error("Já existe um item com esse nome")
+                ch.put(ByteArrayInputStream(ByteArray(0)), p, ChannelSftp.OVERWRITE)
+            }
+            message = "Arquivo criado: $name"
         } finally {
             busy = false
         }
@@ -241,7 +278,8 @@ fun FileBrowser(
     host: Host,
     state: SftpState,
     onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit,
-    onOpenFile: (RemoteFile) -> Unit
+    onOpenFile: (RemoteFile) -> Unit,
+    onOpenTerminal: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -249,6 +287,8 @@ fun FileBrowser(
     var pendingDownload by remember { mutableStateOf<RemoteFile?>(null) }
     var showMkdir by remember { mutableStateOf(false) }
     var newFolder by remember { mutableStateOf("") }
+    var showNewFile by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf("") }
 
     fun guarded(h: Host, block: suspend (Host) -> Unit) {
         scope.launch {
@@ -314,14 +354,46 @@ fun FileBrowser(
         )
     }
 
+    if (showNewFile) {
+        AlertDialog(
+            onDismissRequest = { showNewFile = false },
+            title = { Text("Novo arquivo") },
+            text = {
+                OutlinedTextField(newFileName, { newFileName = it }, singleLine = true, label = { Text("Nome") })
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val name = newFileName.trim()
+                    showNewFile = false
+                    newFileName = ""
+                    if (name.isNotEmpty() && !name.contains('/')) {
+                        guarded(host) {
+                            state.createFile(it, name)
+                            onOpenFile(RemoteFile(name, false, 0L))
+                        }
+                    }
+                }) { Text("Criar") }
+            },
+            dismissButton = { TextButton(onClick = { showNewFile = false }) { Text("Cancelar") } }
+        )
+    }
+
     Column(
         Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(state.path.ifBlank { "…" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                onClick = { onOpenTerminal(state.path) },
+                enabled = state.path.isNotBlank()
+            ) { Text("Terminal aqui") }
             Button(onClick = { uploadLauncher.launch("*/*") }, enabled = !state.busy) { Text("Subir") }
             OutlinedButton(onClick = { showMkdir = true }, enabled = !state.busy) { Text("Nova pasta") }
+            OutlinedButton(onClick = { showNewFile = true }, enabled = !state.busy) { Text("Novo arquivo") }
             OutlinedButton(
                 onClick = { guarded(host) { state.open(it, state.path.ifBlank { null }) } },
                 enabled = !state.busy

@@ -184,12 +184,17 @@ class AnsiBuffer(private val maxChars: Int = 30_000) {
     }
 }
 
+/** Coloca [s] entre aspas simples, seguro para o shell. */
+fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
 class TerminalState {
     var text by mutableStateOf(AnnotatedString(""))
     var connected by mutableStateOf(false)
     var connecting by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var started = false
+    /** Pasta pedida pelo "Terminal aqui"; enviada assim que a sessão estiver conectada. */
+    var pendingCd by mutableStateOf<String?>(null)
 
     private val buffer = AnsiBuffer()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -216,6 +221,7 @@ class TerminalState {
                     channel = ch
                     connected = true
                     startReader(input)
+                    applyPendingCd()
                 } catch (e: Exception) {
                     s.disconnect()
                     throw e
@@ -224,6 +230,19 @@ class TerminalState {
         } finally {
             connecting = false
         }
+    }
+
+    private fun applyPendingCd() {
+        val p = pendingCd ?: return
+        pendingCd = null
+        // Ctrl+U limpa o que já estava digitado na linha antes do cd
+        send("\u0015cd -- ${shellQuote(p)}\r")
+    }
+
+    /** Vai para [path] no terminal (agora, ou assim que conectar). */
+    fun cdTo(path: String) {
+        pendingCd = path
+        if (connected) applyPendingCd()
     }
 
     private fun startReader(input: InputStream) {
@@ -303,6 +322,13 @@ fun TerminalTab(
 
     LaunchedEffect(Unit) {
         if (!state.started) {
+            state.started = true
+            connect(host)
+        }
+    }
+    // "Terminal aqui" com a sessão caída: reconecta e aplica o cd
+    LaunchedEffect(state.pendingCd) {
+        if (state.pendingCd != null && !state.connected && !state.connecting) {
             state.started = true
             connect(host)
         }

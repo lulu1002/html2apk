@@ -321,7 +321,10 @@ fun HostScreen(host: Host, onBack: () -> Unit, onTrust: (Host) -> Unit) {
             when (tab) {
                 0 -> CommandsTab(current, commands, report)
                 1 -> TerminalTab(current, terminal, report)
-                else -> FilesTab(current, files, report)
+                else -> FilesTab(current, files, report) { path ->
+                    tab = 1
+                    terminal.cdTo(path)
+                }
             }
         }
     }

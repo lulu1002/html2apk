@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,9 +38,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -58,6 +61,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -67,10 +71,12 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
+import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 
 private const val MAX_IMAGE = 30 * 1024 * 1024
 private const val MAX_TEXT = 512 * 1024
+private const val MAX_EDIT = 256 * 1024
 private const val MAX_PDF = 50L * 1024 * 1024
 
 enum class FileKind { IMAGE, VIDEO, AUDIO, PDF, TEXT, OTHER }
@@ -116,7 +122,8 @@ fun iconFor(f: RemoteFile): String = if (f.isDir) "📁" else when (kindOf(f.nam
 fun FilesTab(
     host: Host,
     state: SftpState,
-    onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit
+    onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit,
+    onOpenTerminal: (String) -> Unit
 ) {
     var viewing by remember { mutableStateOf<RemoteFile?>(null) }
     val v = viewing
@@ -131,7 +138,7 @@ fun FilesTab(
             onClose = { viewing = null }
         )
     } else {
-        FileBrowser(host, state, onUntrusted) { viewing = it }
+        FileBrowser(host, state, onUntrusted, onOpenFile = { viewing = it }, onOpenTerminal = onOpenTerminal)
     }
 }
 
@@ -145,7 +152,10 @@ fun FileViewer(
     onOpen: (RemoteFile) -> Unit,
     onClose: () -> Unit
 ) {
-    BackHandler(onBack = onClose)
+    val tryClose: () -> Unit = {
+        if (state.editing && state.dirty) state.confirmDiscard = true else onClose()
+    }
+    BackHandler(onBack = tryClose)
     BackHandler(enabled = state.fullscreen) { state.fullscreen = false }
 
     var forceText by remember(file.name) { mutableStateOf(false) }
@@ -185,13 +195,32 @@ fun FileViewer(
     }
     DisposableEffect(Unit) { onDispose { state.fullscreen = false } }
 
+    if (state.confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { state.confirmDiscard = false },
+            title = { Text("Descartar alterações?") },
+            text = { Text("Há alterações não salvas neste arquivo.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.confirmDiscard = false
+                    state.dirty = false
+                    state.editing = false
+                    onClose()
+                }) { Text("Descartar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { state.confirmDiscard = false }) { Text("Continuar editando") }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         if (!fullscreen) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onClose) { Text("Fechar") }
+                TextButton(onClick = tryClose) { Text("Fechar") }
                 Column(Modifier.weight(1f)) {
                     Text(
                         file.name,
@@ -204,8 +233,8 @@ fun FileViewer(
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
-                TextButton(onClick = { prev?.let(onOpen) }, enabled = prev != null) { Text("‹") }
-                TextButton(onClick = { next?.let(onOpen) }, enabled = next != null) { Text("›") }
+                TextButton(onClick = { prev?.let(onOpen) }, enabled = prev != null && !state.editing) { Text("‹") }
+                TextButton(onClick = { next?.let(onOpen) }, enabled = next != null && !state.editing) { Text("›") }
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -349,15 +378,25 @@ private fun strictUtf8(bytes: ByteArray, len: Int): String? = try {
     null
 }
 
+private data class Decoded(
+    val text: String,
+    val charset: Charset,
+    val bom: Boolean,
+    val crlf: Boolean = false
+)
+
 /** UTF-8 estrito; se o arquivo foi cortado, tolera até 3 bytes de caractere partido; senão cai para Latin-1. */
-private fun decodeText(bytes: ByteArray, cutOff: Boolean): String {
+private fun decodeText(bytes: ByteArray, cutOff: Boolean): Decoded {
     val tries = if (cutOff) 4 else 1
     for (cut in 0 until tries) {
         val len = bytes.size - cut
         if (len < 0) break
-        strictUtf8(bytes, len)?.let { return it.removePrefix("\uFEFF") }
+        strictUtf8(bytes, len)?.let {
+            return Decoded(it.removePrefix("\uFEFF"), Charsets.UTF_8, it.startsWith("\uFEFF"))
+        }
     }
-    return if (cutOff) String(bytes, Charsets.UTF_8) else String(bytes, Charsets.ISO_8859_1)
+    return if (cutOff) Decoded(String(bytes, Charsets.UTF_8), Charsets.UTF_8, false)
+    else Decoded(String(bytes, Charsets.ISO_8859_1), Charsets.ISO_8859_1, false)
 }
 
 private fun prettyJson(src: String): String = try {
@@ -506,17 +545,32 @@ private fun MarkdownView(src: String, baseSp: Int) {
 
 @Composable
 fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
+    val scope = rememberCoroutineScope()
     var raw by remember { mutableStateOf<String?>(null) }
+    var meta by remember { mutableStateOf<Decoded?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var fromEnd by remember { mutableStateOf(false) }
     var fontSp by remember { mutableStateOf(12) }
     var pretty by remember { mutableStateOf(false) }
     var rendered by remember { mutableStateOf(true) }
+    var draft by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var confirmExit by remember { mutableStateOf(false) }
+
+    val editing = state.editing
+    DisposableEffect(Unit) {
+        onDispose {
+            state.editing = false
+            state.dirty = false
+        }
+    }
 
     val truncated = file.size > MAX_TEXT
     val ext = file.name.substringAfterLast('.', "").lowercase()
     val isMd = ext == "md" || ext == "markdown"
     val isJson = ext == "json"
+    val canEdit = !truncated && file.size <= MAX_EDIT && !fromEnd && raw != null && errorMsg == null
 
     LaunchedEffect(remote, fromEnd) {
         raw = null
@@ -528,13 +582,58 @@ fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
                 errorMsg = "Arquivo binário: não dá para exibir como texto."
                 return@LaunchedEffect
             }
-            var text = decodeText(bytes, truncated)
+            val d = decodeText(bytes, truncated)
+            var text = d.text
             // lendo o fim: descarta a primeira linha, que veio cortada
             if (fromEnd) text = text.substringAfter('\n', text)
+            meta = d.copy(crlf = text.contains("\r\n"))
             raw = text.replace("\r", "")
         } catch (e: Exception) {
             errorMsg = e.message ?: "Erro ao ler o arquivo"
         }
+    }
+
+    fun save() {
+        val m = meta ?: return
+        var out = draft
+        if (m.crlf) out = out.replace("\n", "\r\n")
+        if (m.charset == Charsets.ISO_8859_1 && out.any { it > '\u00FF' }) {
+            status = "Este arquivo é Latin-1: há caracteres que ele não suporta."
+            return
+        }
+        var bytes = out.toByteArray(m.charset)
+        if (m.bom) bytes = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + bytes
+        saving = true
+        status = "Salvando…"
+        scope.launch {
+            try {
+                state.writeFile(host, remote, bytes)
+                raw = draft
+                state.dirty = false
+                status = "Salvo ✓"
+                try { state.open(host, state.path) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                status = "Erro ao salvar: ${e.message}"
+            }
+            saving = false
+        }
+    }
+
+    if (confirmExit) {
+        AlertDialog(
+            onDismissRequest = { confirmExit = false },
+            title = { Text("Descartar alterações?") },
+            text = { Text("Há alterações não salvas neste arquivo.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmExit = false
+                    state.dirty = false
+                    state.editing = false
+                    status = ""
+                }) { Text("Descartar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmExit = false }) { Text("Continuar editando") } }
+        )
     }
 
     val shown = remember(raw, pretty) {
@@ -555,26 +654,53 @@ fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
         ) {
             TextButton(onClick = { fontSp = (fontSp - 2).coerceAtLeast(8) }) { Text("A−") }
             TextButton(onClick = { fontSp = (fontSp + 2).coerceAtMost(28) }) { Text("A+") }
-            if (isMd) {
-                TextButton(onClick = { rendered = !rendered }) {
-                    Text(if (rendered) "Ver texto" else "Ver formatado")
+            if (editing) {
+                Button(onClick = { save() }, enabled = state.dirty && !saving) { Text("Salvar") }
+                TextButton(onClick = {
+                    if (state.dirty) confirmExit = true else {
+                        state.editing = false
+                        status = ""
+                    }
+                }) { Text("Sair da edição") }
+            } else {
+                if (canEdit) {
+                    TextButton(onClick = {
+                        draft = raw ?: ""
+                        pretty = false
+                        status = ""
+                        state.dirty = false
+                        state.editing = true
+                    }) { Text("Editar") }
+                }
+                if (isMd) {
+                    TextButton(onClick = { rendered = !rendered }) {
+                        Text(if (rendered) "Ver texto" else "Ver formatado")
+                    }
+                }
+                if (isJson && !truncated) {
+                    TextButton(onClick = { pretty = !pretty }) {
+                        Text(if (pretty) "JSON original" else "Formatar JSON")
+                    }
+                }
+                if (truncated) {
+                    TextButton(onClick = { fromEnd = !fromEnd }) {
+                        Text(if (fromEnd) "Ver início" else "Ver fim")
+                    }
                 }
             }
-            if (isJson && !truncated) {
-                TextButton(onClick = { pretty = !pretty }) {
-                    Text(if (pretty) "JSON original" else "Formatar JSON")
-                }
-            }
-            if (truncated) {
-                TextButton(onClick = { fromEnd = !fromEnd }) {
-                    Text(if (fromEnd) "Ver início" else "Ver fim")
-                }
-            }
+        }
+        if (status.isNotBlank()) {
+            Text(
+                status,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            )
         }
         if (truncated) {
             Text(
                 (if (fromEnd) "Mostrando só os últimos " else "Mostrando só os primeiros ") +
-                    "${humanSize(MAX_TEXT.toLong())} de ${humanSize(file.size)}.",
+                    "${humanSize(MAX_TEXT.toLong())} de ${humanSize(file.size)}. " +
+                    "Edição disponível só até ${humanSize(MAX_EDIT.toLong())}.",
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
@@ -583,6 +709,19 @@ fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
             when {
                 errorMsg != null -> CenteredText(errorMsg!!, isError = true)
                 raw == null -> CenteredLoading("Carregando…")
+                editing -> OutlinedTextField(
+                    value = draft,
+                    onValueChange = {
+                        draft = it
+                        state.dirty = it != raw
+                    },
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = fontSp.sp),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false
+                    )
+                )
                 isMd && rendered -> MarkdownView(shown, fontSp)
                 else -> SelectionContainer {
                     LazyColumn(
