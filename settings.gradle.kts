@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "VpsManager"
+rootProject.name = "AdBlockDns"
 include(":app")
