@@ -1,13 +1,16 @@
 package com.adblockdns
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BlockList private constructor(private val context: Context) {
 
@@ -59,9 +62,13 @@ class BlockList private constructor(private val context: Context) {
                 if (end > 2) line.substring(2, end) else null
             } else {
                 val parts = line.split(' ', '\t').filter { it.isNotEmpty() }
-                if (parts.size >= 2 && (parts[0] == "0.0.0.0" || parts[0] == "127.0.0.1")) parts[1] else null
+                when {
+                    parts.size >= 2 && (parts[0] == "0.0.0.0" || parts[0] == "127.0.0.1") -> parts[1]
+                    parts.size == 1 -> parts[0]   // listas com um domínio por linha
+                    else -> null
+                }
             }
-            val d = domain?.lowercase() ?: return@forEachLine
+            val d = domain?.lowercase()?.removePrefix("*.") ?: return@forEachLine
             if (isValidDomain(d)) set.add(d)
         }
     }
@@ -130,6 +137,23 @@ class BlockList private constructor(private val context: Context) {
         return d.all { it.isLetterOrDigit() || it == '-' || it == '.' || it == '_' }
     }
 
+    private val autoRunning = AtomicBoolean(false)
+
+    /** Baixa as listas sozinho se nunca foram baixadas ou se têm mais de 24h. */
+    fun autoUpdateIfStale() {
+        val age = System.currentTimeMillis() - lastUpdate.value
+        if (lastUpdate.value != 0L && age < STALE_MS) return
+        if (!autoRunning.compareAndSet(false, true)) return
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                updateFromNetwork()
+            } catch (_: Exception) {
+            } finally {
+                autoRunning.set(false)
+            }
+        }
+    }
+
     /** Baixa as listas e recarrega. Retorna quantos domínios estão ativos. */
     suspend fun updateFromNetwork(): Int = withContext(Dispatchers.IO) {
         var ok = 0
@@ -139,6 +163,7 @@ class BlockList private constructor(private val context: Context) {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 30_000
+                conn.setRequestProperty("User-Agent", "AdblockDns/0.1")
                 if (conn.responseCode != 200) error("HTTP ${conn.responseCode}")
                 val tmp = File(context.filesDir, "list_$i.tmp")
                 conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
@@ -160,10 +185,13 @@ class BlockList private constructor(private val context: Context) {
         private const val KEY_BLOCK = "custom_block"
         private const val KEY_ALLOW = "custom_allow"
         private const val KEY_LAST_UPDATE = "last_update"
+        private const val STALE_MS = 24L * 60 * 60 * 1000
 
         val SOURCES = listOf(
             "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-            "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+            "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt",
+            "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"
         )
 
         @Volatile private var instance: BlockList? = null
@@ -172,7 +200,7 @@ class BlockList private constructor(private val context: Context) {
             instance ?: synchronized(this) {
                 instance ?: BlockList(context.applicationContext).also {
                     instance = it
-                    Thread { it.reload() }.start()
+                    Thread { it.reload(); it.autoUpdateIfStale() }.start()
                 }
             }
     }

@@ -53,6 +53,7 @@ class DnsVpnService : VpnService() {
         running = true
         DnsStats.running.value = true
         val list = BlockList.get(this)
+        list.autoUpdateIfStale()
         pool = Executors.newFixedThreadPool(8)
         thread = Thread({ loop(fd, list) }, "dns-vpn").also { it.start() }
     }

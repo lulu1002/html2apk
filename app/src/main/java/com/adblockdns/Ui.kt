@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,13 @@ private fun startVpn(context: Context) {
 
 private fun stopVpn(context: Context) {
     context.startService(Intent(context, DnsVpnService::class.java).setAction(DnsVpnService.ACTION_STOP))
+}
+
+/** DNS privado em modo "nome do host" ignora o DNS da VPN e anula o bloqueio. */
+private fun privateDnsStrict(context: Context): Boolean = try {
+    Settings.Global.getString(context.contentResolver, "private_dns_mode") == "hostname"
+} catch (_: Exception) {
+    false
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,6 +82,7 @@ fun HomeTab(list: BlockList) {
     val recent by DnsStats.recent.collectAsState()
     val loaded by list.loadedCount.collectAsState()
     val lastUpdate by list.lastUpdate.collectAsState()
+    val strictDns = remember(running) { privateDnsStrict(context) }
     var updating by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
 
@@ -107,6 +116,15 @@ fun HomeTab(list: BlockList) {
             if (running) "🛡 Protegendo: consultas DNS estão sendo filtradas" else "Proteção desligada",
             style = MaterialTheme.typography.bodyMedium
         )
+
+        if (strictDns) {
+            Text(
+                "⚠ O “DNS privado” do Android está em modo nome do host: ele ignora este app. " +
+                    "Vá em Configurações > Rede > DNS privado e escolha Desativado ou Automático.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("Consultas", total.toString(), Modifier.weight(1f))
