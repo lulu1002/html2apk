@@ -1,29 +1,25 @@
-# VidGrab
+# Monitor de Rede (Android)
 
-App Android (Kotlin + Jetpack Compose) que baixa vídeo/áudio de links usando yt-dlp + ffmpeg embutidos
-([youtubedl-android](https://github.com/JunkFood02/youtubedl-android)).
+App que mostra, em tempo real, quais apps do celular estao se conectando a quais
+servidores (IP, dominio, porta) e quantos bytes enviam/recebem.
 
-## Recursos
-- Cola/compartilha um link → mostra capa, título e duração
-- Vídeo (melhor, 1080p, 720p, 480p, 360p) ou áudio (MP3, M4A)
-- Fila (2 simultâneos), progresso, cancelar, histórico, abrir arquivo
-- Serviço em primeiro plano com notificação
-- Pasta privada (padrão): os arquivos ficam dentro do app, com `.nomedia`, e não aparecem na galeria. Dá para desligar nos Ajustes e salvar em Downloads/VidGrab
-- Atualiza o yt-dlp sozinho (1x/dia) e manualmente nos Ajustes
+Funciona criando uma VPN local no proprio aparelho (VpnService). Nada sai do celular:
+o trafego e apenas encaminhado e contado. Nao precisa de root.
 
 ## Compilar no GitHub Actions
-1. Crie um repositório e suba esta pasta (`git init && git add . && git commit -m init && git push`).
-2. Aba **Actions** → o workflow *Build APK* roda no push. Baixe o APK em **Artifacts**.
-   (Use `app-arm64-v8a-debug.apk` na maioria dos celulares, ou o `universal`.)
+1. Crie um repositorio no GitHub e envie todos estes arquivos (incluindo a pasta `.github`).
+2. Abra a aba **Actions**; o workflow "Build APK" roda sozinho a cada push
+   (ou clique em **Run workflow**).
+3. Quando terminar, abra a execucao e baixe o artefato **NetMonitor-debug-apk**
+   (um .zip com o `app-debug.apk` dentro).
+4. Copie o APK para o celular e instale (permita "instalar apps desconhecidos").
 
-### APK release assinado (opcional)
-Gere um keystore e cadastre em Settings → Secrets → Actions:
-- `KEYSTORE_BASE64` → `base64 -w0 release.jks`
-- `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
+## Usando
+Abra o app > **Iniciar monitor** > aceite o pedido de VPN. A lista atualiza a cada segundo.
 
-## Compilar localmente
-Android Studio (JDK 17) → Open → Run. Ou `gradle assembleDebug` (Gradle 8.9).
-
-## Trocar nome/pacote
-Altere `applicationId` e `namespace` em `app/build.gradle.kts`, `app_name` em `strings.xml`
-e renomeie o pacote `com.example.vidgrab`.
+## Limitacoes
+- So IPv4 (trafego IPv6 nao passa pela VPN e nao aparece).
+- HTTPS: voce ve destino, porta e volume, nao o conteudo.
+- Nome do app dono da conexao exige Android 10 ou mais novo.
+- "DNS privado" do Android pode esconder os nomes de dominio (veja so o IP).
+- Ping (ICMP) nao e encaminhado.

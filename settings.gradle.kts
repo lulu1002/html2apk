@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "VidGrab"
+rootProject.name = "NetMonitor"
 include(":app")
