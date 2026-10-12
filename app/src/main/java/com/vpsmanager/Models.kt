@@ -9,5 +9,7 @@ data class Host(
     val port: Int = 22,
     val user: String,
     val password: String = "",
-    val privateKey: String = ""
+    val privateKey: String = "",
+    /** Fingerprint SHA256 confiado do servidor (vazio = ainda não confiado). */
+    val fingerprint: String = ""
 )

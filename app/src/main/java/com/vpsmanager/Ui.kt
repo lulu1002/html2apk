@@ -27,7 +27,14 @@ fun App(store: HostStore) {
     val current = selected
     Surface(Modifier.fillMaxSize()) {
         if (current != null) {
-            HostScreen(current) { selected = null }
+            HostScreen(
+                host = current,
+                onBack = { selected = null },
+                onTrust = { updated ->
+                    hosts = hosts.map { if (it.id == updated.id) updated else it }
+                    store.save(hosts)
+                }
+            )
         } else {
             HostList(
                 hosts = hosts,
@@ -143,70 +150,175 @@ private val quickCommands = listOf(
     "Portas" to "ss -tulpn"
 )
 
+class CommandsState {
+    var output by mutableStateOf("Escolha um comando.")
+    var running by mutableStateOf(false)
+    var custom by mutableStateOf("")
+}
+
+@Composable
+fun TrustDialog(host: Host, e: HostKeyException, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(if (e.changed) "⚠ Fingerprint mudou!" else "Confiar neste servidor?") },
+        text = {
+            SelectionContainer {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (e.changed) {
+                        Text(
+                            "A chave de ${host.host} é diferente da que você confiou antes. " +
+                                "Pode ser um ataque (man-in-the-middle) ou o servidor ter sido reinstalado."
+                        )
+                        Text("Salvo:", style = MaterialTheme.typography.labelMedium)
+                        Text(host.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        Text("Recebido:", style = MaterialTheme.typography.labelMedium)
+                    } else {
+                        Text("Primeira conexão com ${host.host}. Tipo da chave: ${e.keyType}")
+                    }
+                    Text(e.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Text(
+                        "Confira no servidor com:\nssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(if (e.changed) "Confiar mesmo assim" else "Confiar") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancelar") } }
+    )
+}
+
+@Composable
+fun CommandsTab(
+    host: Host,
+    st: CommandsState,
+    onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+
+    fun run(cmd: String, target: Host) {
+        if (st.running || cmd.isBlank()) return
+        st.running = true
+        st.output = "$ $cmd\n"
+        scope.launch {
+            try {
+                st.output += SshRunner.exec(target, cmd)
+            } catch (e: HostKeyException) {
+                st.output += "Conexão bloqueada: confirme o fingerprint do servidor."
+                onUntrusted(e) { trusted -> run(cmd, trusted) }
+            } catch (e: Exception) {
+                st.output += "Erro: ${e.message}"
+            }
+            st.running = false
+        }
+    }
+
+    Column(
+        Modifier.padding(12.dp).fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (host.fingerprint.isNotBlank()) {
+            Text("🔒 ${host.fingerprint}", fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(quickCommands) { (label, cmd) ->
+                AssistChip(onClick = { run(cmd, host) }, label = { Text(label) })
+            }
+        }
+        if (st.running) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Surface(tonalElevation = 3.dp, modifier = Modifier.weight(1f).fillMaxWidth()) {
+            SelectionContainer {
+                Text(
+                    st.output,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState()).padding(12.dp)
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                st.custom, { st.custom = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                label = { Text("Comando") }
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { run(st.custom, host) }, enabled = !st.running) { Text("Executar") }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HostScreen(host: Host, onBack: () -> Unit) {
+fun HostScreen(host: Host, onBack: () -> Unit, onTrust: (Host) -> Unit) {
     BackHandler(onBack = onBack)
-    val scope = rememberCoroutineScope()
-    var output by remember { mutableStateOf("Escolha um comando.") }
-    var running by remember { mutableStateOf(false) }
-    var custom by remember { mutableStateOf("") }
+    var current by remember { mutableStateOf(host) }
+    var tab by remember { mutableStateOf(0) }
+    var untrusted by remember { mutableStateOf<HostKeyException?>(null) }
+    var retry by remember { mutableStateOf<((Host) -> Unit)?>(null) }
+    val commands = remember { CommandsState() }
+    val terminal = remember { TerminalState() }
+    val files = remember { SftpState() }
 
-    fun run(cmd: String) {
-        if (running || cmd.isBlank()) return
-        running = true
-        output = "$ $cmd\n"
-        scope.launch {
-            val result = try {
-                SshRunner.exec(host, cmd)
-            } catch (e: Exception) {
-                "Erro: ${e.message}"
-            }
-            output += result
-            running = false
+    DisposableEffect(Unit) {
+        onDispose {
+            terminal.close()
+            files.close()
         }
+    }
+
+    val report: (HostKeyException, (Host) -> Unit) -> Unit = { e, r ->
+        untrusted = e
+        retry = r
+    }
+
+    untrusted?.let { e ->
+        TrustDialog(
+            host = current,
+            e = e,
+            onConfirm = {
+                val updated = current.copy(fingerprint = e.fingerprint)
+                current = updated
+                onTrust(updated)
+                val r = retry
+                untrusted = null
+                retry = null
+                r?.invoke(updated)
+            },
+            onCancel = {
+                untrusted = null
+                retry = null
+            }
+        )
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(host.name) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Voltar") } }
-            )
+            Column {
+                TopAppBar(
+                    title = { Text(current.name) },
+                    navigationIcon = { TextButton(onClick = onBack) { Text("Voltar") } }
+                )
+                TabRow(selectedTabIndex = tab) {
+                    listOf("Comandos", "Terminal", "Arquivos").forEachIndexed { i, title ->
+                        Tab(selected = tab == i, onClick = { tab = i }, text = { Text(title) })
+                    }
+                }
+            }
         }
     ) { pad ->
-        Column(
-            Modifier.padding(pad).padding(12.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(quickCommands) { (label, cmd) ->
-                    AssistChip(onClick = { run(cmd) }, label = { Text(label) })
-                }
-            }
-            if (running) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Surface(
-                tonalElevation = 3.dp,
-                modifier = Modifier.weight(1f).fillMaxWidth()
-            ) {
-                SelectionContainer {
-                    Text(
-                        output,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        modifier = Modifier.verticalScroll(rememberScrollState()).padding(12.dp)
-                    )
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    custom, { custom = it },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    label = { Text("Comando") }
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { run(custom) }, enabled = !running) { Text("Executar") }
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            when (tab) {
+                0 -> CommandsTab(current, commands, report)
+                1 -> TerminalTab(current, terminal, report)
+                else -> FilesTab(current, files, report)
             }
         }
     }

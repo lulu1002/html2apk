@@ -28,7 +28,8 @@ class HostStore(context: Context) {
                 port = o.optInt("port", 22),
                 user = o.getString("user"),
                 password = o.optString("password"),
-                privateKey = o.optString("privateKey")
+                privateKey = o.optString("privateKey"),
+                fingerprint = o.optString("fingerprint")
             )
         }
     }
@@ -40,6 +41,7 @@ class HostStore(context: Context) {
                 put("id", h.id); put("name", h.name); put("host", h.host)
                 put("port", h.port); put("user", h.user)
                 put("password", h.password); put("privateKey", h.privateKey)
+                put("fingerprint", h.fingerprint)
             })
         }
         prefs.edit().putString("hosts", arr.toString()).apply()
