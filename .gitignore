@@ -1,7 +1,6 @@
 .gradle/
 build/
 local.properties
-*.iml
-.idea/
 *.jks
 *.keystore
+.idea/

@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.vpsmanager"
+    namespace = "com.tameczada.vpn"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.vpsmanager"
-        minSdk = 26
+        applicationId = "com.tameczada.vpn"
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0"
     }
 
     buildTypes {
@@ -20,30 +20,17 @@ android {
             isMinifyEnabled = false
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
-    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            excludes += "META-INF/versions/**"
-        }
-    }
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
-    implementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose:1.9.0")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("com.github.mwiede:jsch:0.2.20")
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("com.wireguard.android:tunnel:1.0.20230706")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }
