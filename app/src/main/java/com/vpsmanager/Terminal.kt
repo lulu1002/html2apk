@@ -270,7 +270,7 @@ class TerminalState(val number: Int = 1) {
     private var out: OutputStream? = null
 
     /** Liga/desliga o realce e redesenha o texto atual. */
-    fun setHighlight(v: Boolean) {
+    fun applyHighlight(v: Boolean) {
         highlight = v
         scope.launch { text = buffer.toAnnotated(v) }
     }

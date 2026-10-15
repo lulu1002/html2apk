@@ -116,7 +116,7 @@ fun TerminalTab(
             connect(host)
         }
     }
-    LaunchedEffect(settings.highlight) { state.setHighlight(settings.highlight) }
+    LaunchedEffect(settings.highlight) { state.applyHighlight(settings.highlight) }
     LaunchedEffect(state.text.length) { scroll.scrollTo(scroll.maxValue) }
 
     fun sendLine() {
@@ -147,7 +147,7 @@ fun TerminalTab(
             }
             Text("Realce", style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.width(4.dp))
-            Switch(checked = settings.highlight, onCheckedChange = { settings.setHighlight(it) })
+            Switch(checked = settings.highlight, onCheckedChange = { settings.updateHighlight(it) })
             TextButton(onClick = { settings.changeFont(-1) }) { Text("A−") }
             TextButton(onClick = { settings.changeFont(1) }) { Text("A+") }
         }

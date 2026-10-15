@@ -26,7 +26,7 @@ class TerminalSettings(context: Context) {
         private set
     val shortcuts = mutableStateListOf<Shortcut>().apply { addAll(loadShortcuts()) }
 
-    fun setHighlight(v: Boolean) {
+    fun updateHighlight(v: Boolean) {
         highlight = v
         prefs.edit().putBoolean("highlight", v).apply()
     }
