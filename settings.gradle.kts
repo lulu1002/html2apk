@@ -12,5 +12,6 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "VpsManager"
+
+rootProject.name = "WifiScout"
 include(":app")
