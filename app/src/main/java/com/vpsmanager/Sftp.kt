@@ -3,11 +3,15 @@ package com.vpsmanager
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,16 +21,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jcraft.jsch.ChannelSftp
+import com.jcraft.jsch.ChannelExec
+import com.jcraft.jsch.SftpException
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Aspas simples seguras para o shell remoto. */
+private fun shq(p: String): String = "'" + p.replace("'", "'\\''") + "'"
+
+private fun validName(n: String): Boolean {
+    val t = n.trim()
+    return t.isNotEmpty() && !t.contains('/') && t != "." && t != ".."
+}
+
 data class RemoteFile(val name: String, val isDir: Boolean, val size: Long)
+
+/** Item "copiado"/"recortado" esperando para ser colado em outra pasta. */
+data class Clip(val dir: String, val name: String, val isDir: Boolean, val move: Boolean)
 
 fun joinPath(dir: String, name: String) = if (dir.endsWith("/")) dir + name else "$dir/$name"
 
@@ -51,6 +69,7 @@ class SftpState {
     var busy by mutableStateOf(false)
     var message by mutableStateOf("")
     var started = false
+    var clip by mutableStateOf<Clip?>(null)
 
     private var session: Session? = null
     private var sftp: ChannelSftp? = null
@@ -149,6 +168,131 @@ class SftpState {
         open(h, path)
     }
 
+    /** Executa um comando no servidor (mesma sessão) e falha se o código de saída != 0. */
+    private fun runRemote(command: String): String {
+        val s = session ?: error("Sem sessão SFTP")
+        val ch = s.openChannel("exec") as ChannelExec
+        val out = ByteArrayOutputStream()
+        ch.setCommand(command)
+        ch.setOutputStream(out)
+        ch.setErrStream(out)
+        ch.connect(10_000)
+        var waited = 0
+        while (!ch.isClosed && waited < 300_000) {
+            Thread.sleep(100)
+            waited += 100
+        }
+        val code = ch.exitStatus
+        ch.disconnect()
+        val text = out.toString("UTF-8")
+        if (code != 0) error(text.trim().ifBlank { "o comando falhou (código $code)" })
+        return text
+    }
+
+    /** Nome livre na pasta: "arquivo (cópia).txt", "arquivo (cópia 2).txt"... */
+    private fun freeName(ch: ChannelSftp, dir: String, name: String, isDir: Boolean): String {
+        if (!exists(ch, joinPath(dir, name))) return name
+        val dot = name.lastIndexOf('.')
+        val hasExt = !isDir && dot > 0
+        val base = if (hasExt) name.substring(0, dot) else name
+        val ext = if (hasExt) name.substring(dot) else ""
+        var i = 1
+        while (true) {
+            val cand = if (i == 1) "$base (cópia)$ext" else "$base (cópia $i)$ext"
+            if (!exists(ch, joinPath(dir, cand))) return cand
+            i++
+        }
+    }
+
+    /** Cola o item da área de transferência na pasta atual (copiar ou mover). */
+    suspend fun paste(h: Host) {
+        val c = clip ?: return
+        busy = true
+        try {
+            val src = joinPath(c.dir, c.name)
+            val dstDir = path
+            if (c.isDir && (dstDir == src || dstDir.startsWith("$src/"))) {
+                error("Não dá para colocar uma pasta dentro dela mesma")
+            }
+            val finalName = withContext(Dispatchers.IO) {
+                val ch = ensure(h)
+                if (c.move) {
+                    if (dstDir == c.dir) error("O item já está nesta pasta")
+                    val dst = joinPath(dstDir, c.name)
+                    if (exists(ch, dst)) error("Já existe um item chamado \"${c.name}\" nesta pasta")
+                    try {
+                        ch.rename(src, dst)
+                    } catch (e: SftpException) {
+                        // outro disco/partição: rename não funciona, usa mv
+                        runRemote("mv -n -- ${shq(src)} ${shq(dst)}")
+                    }
+                    c.name
+                } else {
+                    val target = freeName(ch, dstDir, c.name, c.isDir)
+                    runRemote("cp -a -- ${shq(src)} ${shq(joinPath(dstDir, target))}")
+                    target
+                }
+            }
+            message = if (c.move) "Movido: ${c.name}" else "Copiado: $finalName"
+            clip = null
+        } finally {
+            busy = false
+        }
+        open(h, path)
+    }
+
+    private fun exists(ch: ChannelSftp, p: String): Boolean = try {
+        ch.stat(p)
+        true
+    } catch (e: SftpException) {
+        if (e.id == ChannelSftp.SSH_FX_NO_SUCH_FILE) false else throw e
+    }
+
+    /** Cria um arquivo vazio na pasta atual (recusa se o nome já existe). */
+    suspend fun createFile(h: Host, name: String) {
+        busy = true
+        try {
+            withContext(Dispatchers.IO) {
+                val ch = ensure(h)
+                val p = joinPath(path, name)
+                if (exists(ch, p)) error("Já existe um item chamado \"$name\"")
+                ch.put(ByteArrayInputStream(ByteArray(0)), p)
+            }
+            message = "Arquivo criado: $name"
+        } finally {
+            busy = false
+        }
+        open(h, path)
+    }
+
+    /** Renomeia dentro da pasta atual (recusa se o novo nome já existe). */
+    suspend fun rename(h: Host, f: RemoteFile, newName: String) {
+        busy = true
+        try {
+            withContext(Dispatchers.IO) {
+                val ch = ensure(h)
+                val dst = joinPath(path, newName)
+                if (exists(ch, dst)) error("Já existe um item chamado \"$newName\"")
+                ch.rename(joinPath(path, f.name), dst)
+            }
+            message = "Renomeado: ${f.name} → $newName"
+        } finally {
+            busy = false
+        }
+        open(h, path)
+    }
+
+    /** Sobrescreve o arquivo remoto (mantém dono e permissões do arquivo existente). */
+    suspend fun writeBytes(h: Host, remote: String, data: ByteArray) = withContext(Dispatchers.IO) {
+        ensure(h)
+        val ch = newChannel()
+        try {
+            ch.put(ByteArrayInputStream(data), remote)
+        } finally {
+            ch.disconnect()
+        }
+    }
+
     /** Garante que existe uma sessão SFTP conectada. */
     suspend fun connect(h: Host) {
         ensure(h)
@@ -225,6 +369,7 @@ fun FileBrowser(
     host: Host,
     state: SftpState,
     onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit,
+    onOpenTerminal: (String) -> Unit,
     onOpenFile: (RemoteFile) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -233,6 +378,10 @@ fun FileBrowser(
     var pendingDownload by remember { mutableStateOf<RemoteFile?>(null) }
     var showMkdir by remember { mutableStateOf(false) }
     var newFolder by remember { mutableStateOf("") }
+    var showNewFile by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf("") }
+    var renaming by remember { mutableStateOf<RemoteFile?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     fun guarded(h: Host, block: suspend (Host) -> Unit) {
         scope.launch {
@@ -298,14 +447,96 @@ fun FileBrowser(
         )
     }
 
+    if (showNewFile) {
+        AlertDialog(
+            onDismissRequest = { showNewFile = false },
+            title = { Text("Novo arquivo") },
+            text = {
+                OutlinedTextField(
+                    newFileName, { newFileName = it },
+                    singleLine = true,
+                    label = { Text("Nome (ex: notas.txt)") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = validName(newFileName),
+                    onClick = {
+                        val name = newFileName.trim()
+                        showNewFile = false
+                        newFileName = ""
+                        guarded(host) {
+                            state.createFile(it, name)
+                            onOpenFile(RemoteFile(name, false, 0L))
+                        }
+                    }
+                ) { Text("Criar e abrir") }
+            },
+            dismissButton = { TextButton(onClick = { showNewFile = false }) { Text("Cancelar") } }
+        )
+    }
+
+    renaming?.let { f ->
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Renomear") },
+            text = {
+                OutlinedTextField(
+                    renameText, { renameText = it },
+                    singleLine = true,
+                    label = { Text("Novo nome") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = validName(renameText) && renameText.trim() != f.name,
+                    onClick = {
+                        val newName = renameText.trim()
+                        renaming = null
+                        guarded(host) { state.rename(it, f, newName) }
+                    }
+                ) { Text("Renomear") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancelar") } }
+        )
+    }
+
     Column(
         Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(state.path.ifBlank { "…" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        state.clip?.let { c ->
+            Text(
+                "${if (c.move) "Movendo" else "Copiando"}: ${c.name} — abra a pasta de destino e toque em Colar aqui",
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            state.clip?.let {
+                Button(onClick = { guarded(host) { h -> state.paste(h) } }, enabled = !state.busy) {
+                    Text("Colar aqui")
+                }
+                TextButton(onClick = { state.clip = null }) { Text("Cancelar") }
+            }
             Button(onClick = { uploadLauncher.launch("*/*") }, enabled = !state.busy) { Text("Subir") }
             OutlinedButton(onClick = { showMkdir = true }, enabled = !state.busy) { Text("Nova pasta") }
+            OutlinedButton(onClick = { showNewFile = true }, enabled = !state.busy) { Text("Novo arquivo") }
+            OutlinedButton(
+                onClick = { onOpenTerminal(state.path) },
+                enabled = state.path.isNotBlank()
+            ) { Text("Terminal aqui") }
             OutlinedButton(
                 onClick = { guarded(host) { state.open(it, state.path.ifBlank { null }) } },
                 enabled = !state.busy
@@ -346,13 +577,51 @@ fun FileBrowser(
                         )
                         if (!f.isDir) Text(humanSize(f.size), style = MaterialTheme.typography.labelSmall)
                     }
-                    if (!f.isDir) {
-                        TextButton(onClick = {
-                            pendingDownload = f
-                            downloadLauncher.launch(f.name)
-                        }) { Text("Baixar") }
+                    var menuOpen by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = 20.sp) }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            if (!f.isDir) {
+                                DropdownMenuItem(
+                                    text = { Text("Baixar") },
+                                    onClick = {
+                                        menuOpen = false
+                                        pendingDownload = f
+                                        downloadLauncher.launch(f.name)
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Copiar") },
+                                onClick = {
+                                    menuOpen = false
+                                    state.clip = Clip(state.path, f.name, f.isDir, move = false)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Mover") },
+                                onClick = {
+                                    menuOpen = false
+                                    state.clip = Clip(state.path, f.name, f.isDir, move = true)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Renomear") },
+                                onClick = {
+                                    menuOpen = false
+                                    renameText = f.name
+                                    renaming = f
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Excluir") },
+                                onClick = {
+                                    menuOpen = false
+                                    toDelete = f
+                                }
+                            )
+                        }
                     }
-                    TextButton(onClick = { toDelete = f }) { Text("Excluir") }
                 }
             }
         }

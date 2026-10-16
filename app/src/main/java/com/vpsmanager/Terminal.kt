@@ -21,53 +21,58 @@ private fun rgb(r: Int, g: Int, b: Int): Int =
 
 private fun cubeLevel(x: Int): Int = if (x == 0) 0 else 55 + 40 * x
 
-/** Paleta xterm de 256 cores. */
-private fun xterm256(n: Int, palette: IntArray, bright: IntArray): Int = when {
-    n < 8 -> palette[n.coerceAtLeast(0)]
-    n < 16 -> bright[n - 8]
-    n < 232 -> {
+/** Cores fixas da paleta xterm de 256 (índices 16..255). */
+private fun xterm256Rgb(n: Int): Int =
+    if (n < 232) {
         val v = n - 16
         rgb(cubeLevel(v / 36), cubeLevel((v / 6) % 6), cubeLevel(v % 6))
-    }
-    else -> {
+    } else {
         val g = (8 + (n - 232) * 10).coerceAtMost(255)
         rgb(g, g, g)
     }
-}
+
+/** Aspas simples seguras para o shell. */
+private fun shellQuote(p: String): String = "'" + p.replace("'", "'\\''") + "'"
 
 /**
  * Realce por padrões: pinta erros, avisos, sucessos, URLs, IPs, caminhos, datas e o
  * prompt user@host. Só atua em texto que o servidor NÃO coloriu (cores ANSI vencem).
+ * As cores vêm do tema ativo.
  */
 object Highlighter {
-    private class Rule(val regex: Regex, val style: SpanStyle)
+    private enum class Role { RED, YELLOW, GREEN, LINK, CYAN, MAGENTA, GRAY }
 
-    private val RED = SpanStyle(color = Color(0xFFE06C75))
-    private val YELLOW = SpanStyle(color = Color(0xFFE5C07B))
-    private val GREEN = SpanStyle(color = Color(0xFF98C379))
-    private val BLUE_LINK = SpanStyle(color = Color(0xFF61AFEF), textDecoration = TextDecoration.Underline)
-    private val CYAN = SpanStyle(color = Color(0xFF56B6C2))
-    private val MAGENTA = SpanStyle(color = Color(0xFFC678DD))
-    private val GRAY = SpanStyle(color = Color(0xFF7F7F7F))
+    private class Rule(val regex: Regex, val role: Role)
 
     private val rules = listOf(
         Rule(
             Regex("""(?i)\b(error|erro|failed|failure|fatal|denied|refused|critical|panic|exception|segfault|not found|no such file or directory)\b"""),
-            RED
+            Role.RED
         ),
-        Rule(Regex("""(?i)\b(warn(ing)?|aviso|deprecated|timed? ?out)\b"""), YELLOW),
-        Rule(Regex("""(?i)\b(success(fully)?|ok|done|passed|started|enabled|active \(running\)|running)\b"""), GREEN),
-        Rule(Regex("""https?://[^\s"'<>)]+"""), BLUE_LINK),
-        Rule(Regex("""\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?"""), GRAY),
-        Rule(Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b"""), MAGENTA),
-        Rule(Regex("""(?m)^[\w.-]+@[\w.-]+(?=:)"""), GREEN),
-        Rule(Regex("""(?<![\w./-])(?:~|\.{1,2})?/[\w.@%+=:,~/-]+"""), CYAN),
-        Rule(Regex("""\b\d{2}:\d{2}:\d{2}\b"""), GRAY)
+        Rule(Regex("""(?i)\b(warn(ing)?|aviso|deprecated|timed? ?out)\b"""), Role.YELLOW),
+        Rule(Regex("""(?i)\b(success(fully)?|ok|done|passed|started|enabled|active \(running\)|running)\b"""), Role.GREEN),
+        Rule(Regex("""https?://[^\s"'<>)]+"""), Role.LINK),
+        Rule(Regex("""\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?"""), Role.GRAY),
+        Rule(Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b"""), Role.MAGENTA),
+        Rule(Regex("""(?m)^[\w.-]+@[\w.-]+(?=:)"""), Role.GREEN),
+        Rule(Regex("""(?<![\w./-])(?:~|\.{1,2})?/[\w.@%+=:,~/-]+"""), Role.CYAN),
+        Rule(Regex("""\b\d{2}:\d{2}:\d{2}\b"""), Role.GRAY)
     )
 
-    fun apply(text: String, colors: List<Int>, add: (Int, Int, SpanStyle) -> Unit) {
+    private fun styleOf(role: Role, t: TerminalTheme): SpanStyle = when (role) {
+        Role.RED -> SpanStyle(color = t.ansi(1))
+        Role.YELLOW -> SpanStyle(color = t.ansi(3))
+        Role.GREEN -> SpanStyle(color = t.ansi(2))
+        Role.LINK -> SpanStyle(color = t.ansi(4), textDecoration = TextDecoration.Underline)
+        Role.CYAN -> SpanStyle(color = t.ansi(6))
+        Role.MAGENTA -> SpanStyle(color = t.ansi(5))
+        Role.GRAY -> SpanStyle(color = t.ansi(8))
+    }
+
+    fun apply(text: String, colors: List<Int>, theme: TerminalTheme, add: (Int, Int, SpanStyle) -> Unit) {
         val taken = BooleanArray(text.length)
         for (rule in rules) {
+            val style = styleOf(rule.role, theme)
             for (m in rule.regex.findAll(text)) {
                 val s = m.range.first
                 val e = m.range.last + 1
@@ -79,7 +84,7 @@ object Highlighter {
                 }
                 if (!free) continue
                 for (k in s until e) taken[k] = true
-                add(s, e, rule.style)
+                add(s, e, style)
             }
         }
     }
@@ -88,6 +93,9 @@ object Highlighter {
 /**
  * Emulador de terminal MÍNIMO: cursor na linha, \r, backspace, apagar linha,
  * cores ANSI (16, 256 e RGB). NÃO suporta apps de tela cheia (vim, htop, nano).
+ *
+ * Cores guardadas: 0 = padrão, 1..16 = índice da paleta ANSI (+1; muda com o tema),
+ * qualquer outro valor = cor RGB fixa (ARGB).
  */
 class AnsiBuffer(private val maxChars: Int = 30_000) {
     private val chars = ArrayList<Char>()
@@ -109,7 +117,7 @@ class AnsiBuffer(private val maxChars: Int = 30_000) {
     }
 
     @Synchronized
-    fun toAnnotated(highlight: Boolean): AnnotatedString {
+    fun toAnnotated(highlight: Boolean, theme: TerminalTheme): AnnotatedString {
         val plain = String(CharArray(chars.size) { chars[it] })
         return buildAnnotatedString {
             append(plain)
@@ -118,10 +126,13 @@ class AnsiBuffer(private val maxChars: Int = 30_000) {
                 val c = colors[i]
                 var j = i
                 while (j < colors.size && colors[j] == c) j++
-                if (c != 0) addStyle(SpanStyle(color = Color(c)), i, j)
+                if (c != 0) {
+                    val col = if (c in 1..16) theme.ansi(c - 1) else Color(c)
+                    addStyle(SpanStyle(color = col), i, j)
+                }
                 i = j
             }
-            if (highlight) Highlighter.apply(plain, colors) { s, e, style -> addStyle(style, s, e) }
+            if (highlight) Highlighter.apply(plain, colors, theme) { s, e, style -> addStyle(style, s, e) }
         }
     }
 
@@ -217,11 +228,13 @@ class AnsiBuffer(private val maxChars: Int = 30_000) {
         while (i < list.size) {
             when (val code = list[i]) {
                 0, 39 -> color = 0
-                in 30..37 -> color = PALETTE[code - 30]
-                in 90..97 -> color = BRIGHT[code - 90]
+                in 30..37 -> color = code - 30 + 1
+                in 90..97 -> color = code - 90 + 9
                 38 -> when (list.getOrNull(i + 1)) {
                     5 -> {
-                        list.getOrNull(i + 2)?.let { color = xterm256(it, PALETTE, BRIGHT) }
+                        list.getOrNull(i + 2)?.let { n ->
+                            color = if (n < 16) n + 1 else xterm256Rgb(n.coerceAtMost(255))
+                        }
                         i += 2
                     }
                     2 -> {
@@ -240,21 +253,14 @@ class AnsiBuffer(private val maxChars: Int = 30_000) {
             i++
         }
     }
-
-    companion object {
-        private val PALETTE = intArrayOf(
-            0xFF7F7F7F.toInt(), 0xFFE06C75.toInt(), 0xFF98C379.toInt(), 0xFFE5C07B.toInt(),
-            0xFF61AFEF.toInt(), 0xFFC678DD.toInt(), 0xFF56B6C2.toInt(), 0xFFDCDFE4.toInt()
-        )
-        private val BRIGHT = intArrayOf(
-            0xFFA0A0A0.toInt(), 0xFFFF7B86.toInt(), 0xFFB5E890.toInt(), 0xFFFFD98E.toInt(),
-            0xFF7FC4FF.toInt(), 0xFFE08FFF.toInt(), 0xFF6FD3E0.toInt(), 0xFFFFFFFF.toInt()
-        )
-    }
 }
 
 /** Um shell remoto (uma aba de terminal). */
-class TerminalState(val number: Int = 1) {
+class TerminalState(val number: Int = 1, val startDir: String? = null) {
+    /** Nome curto da pasta inicial, para o título da aba. */
+    val dirName: String?
+        get() = startDir?.trimEnd('/')?.substringAfterLast('/')?.ifEmpty { "/" }
+
     var text by mutableStateOf(AnnotatedString(""))
     var connected by mutableStateOf(false)
     var connecting by mutableStateOf(false)
@@ -262,6 +268,8 @@ class TerminalState(val number: Int = 1) {
     var started = false
 
     @Volatile private var highlight = true
+    @Volatile private var theme: TerminalTheme = TerminalThemes.all[0]
+    private var startDirSent = false
     private val buffer = AnsiBuffer()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val writer = Executors.newSingleThreadExecutor()
@@ -269,10 +277,11 @@ class TerminalState(val number: Int = 1) {
     private var channel: ChannelShell? = null
     private var out: OutputStream? = null
 
-    /** Liga/desliga o realce e redesenha o texto atual. */
-    fun applyHighlight(v: Boolean) {
-        highlight = v
-        scope.launch { text = buffer.toAnnotated(v) }
+    /** Aplica realce + tema e redesenha o texto atual. */
+    fun applyStyle(h: Boolean, t: TerminalTheme) {
+        highlight = h
+        theme = t
+        scope.launch { text = buffer.toAnnotated(h, t) }
     }
 
     suspend fun connect(h: Host) {
@@ -293,6 +302,11 @@ class TerminalState(val number: Int = 1) {
                     channel = ch
                     connected = true
                     startReader(input)
+                    val dir = startDir
+                    if (dir != null && !startDirSent) {
+                        startDirSent = true
+                        send("cd -- ${shellQuote(dir)} && clear\r")
+                    }
                 } catch (e: Exception) {
                     s.disconnect()
                     throw e
@@ -316,11 +330,11 @@ class TerminalState(val number: Int = 1) {
                     val now = System.currentTimeMillis()
                     // só redesenha quando não há mais dados pendentes (ou a cada 100 ms)
                     if (!reader.ready() || now - last > 100) {
-                        text = buffer.toAnnotated(highlight)
+                        text = buffer.toAnnotated(highlight, theme)
                         last = now
                     }
                 }
-                text = buffer.toAnnotated(highlight)
+                text = buffer.toAnnotated(highlight, theme)
             } catch (_: Exception) {
             }
             connected = false

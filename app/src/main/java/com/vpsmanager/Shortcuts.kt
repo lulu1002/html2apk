@@ -24,7 +24,15 @@ class TerminalSettings(context: Context) {
         private set
     var fontSize by mutableStateOf(prefs.getInt("font_size", 11))
         private set
+    var themeIndex by mutableStateOf(prefs.getInt("theme", 0).coerceIn(0, TerminalThemes.all.lastIndex))
+        private set
+    val theme: TerminalTheme get() = TerminalThemes.all[themeIndex]
     val shortcuts = mutableStateListOf<Shortcut>().apply { addAll(loadShortcuts()) }
+
+    fun selectTheme(i: Int) {
+        themeIndex = i.coerceIn(0, TerminalThemes.all.lastIndex)
+        prefs.edit().putInt("theme", themeIndex).apply()
+    }
 
     fun updateHighlight(v: Boolean) {
         highlight = v

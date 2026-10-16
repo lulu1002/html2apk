@@ -13,7 +13,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -23,6 +27,8 @@ fun App(store: HostStore) {
     var hosts by remember { mutableStateOf(store.load()) }
     var selected by remember { mutableStateOf<Host?>(null) }
     var showDialog by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Host?>(null) }
+    var toDelete by remember { mutableStateOf<Host?>(null) }
 
     val current = selected
     Surface(Modifier.fillMaxSize()) {
@@ -39,14 +45,43 @@ fun App(store: HostStore) {
             HostList(
                 hosts = hosts,
                 onOpen = { selected = it },
-                onDelete = { h -> hosts = hosts - h; store.save(hosts) },
+                onEdit = { editing = it },
+                onDelete = { toDelete = it },
                 onAdd = { showDialog = true }
             )
         }
-        if (showDialog) {
+        if (showDialog || editing != null) {
             HostDialog(
-                onDismiss = { showDialog = false },
-                onSave = { h -> hosts = hosts + h; store.save(hosts); showDialog = false }
+                initial = editing,
+                onDismiss = {
+                    showDialog = false
+                    editing = null
+                },
+                onSave = { h ->
+                    hosts = if (hosts.any { it.id == h.id }) {
+                        hosts.map { if (it.id == h.id) h else it }
+                    } else {
+                        hosts + h
+                    }
+                    store.save(hosts)
+                    showDialog = false
+                    editing = null
+                }
+            )
+        }
+        toDelete?.let { h ->
+            AlertDialog(
+                onDismissRequest = { toDelete = null },
+                title = { Text("Excluir ${h.name}?") },
+                text = { Text("Os dados salvos deste servidor serão removidos do aparelho.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        hosts = hosts - h
+                        store.save(hosts)
+                        toDelete = null
+                    }) { Text("Excluir") }
+                },
+                dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancelar") } }
             )
         }
     }
@@ -57,6 +92,7 @@ fun App(store: HostStore) {
 fun HostList(
     hosts: List<Host>,
     onOpen: (Host) -> Unit,
+    onEdit: (Host) -> Unit,
     onDelete: (Host) -> Unit,
     onAdd: () -> Unit
 ) {
@@ -78,15 +114,16 @@ fun HostList(
             ) {
                 items(hosts, key = { it.id }) { h ->
                     Card(onClick = { onOpen(h) }, modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(h.name, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "${h.user}@${h.host}:${h.port}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                        Column(Modifier.padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 4.dp)) {
+                            Text(h.name, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "${h.user}@${h.host}:${h.port}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { onEdit(h) }) { Text("Editar") }
+                                TextButton(onClick = { onDelete(h) }) { Text("Excluir") }
                             }
-                            TextButton(onClick = { onDelete(h) }) { Text("Excluir") }
                         }
                     }
                 }
@@ -96,45 +133,93 @@ fun HostList(
 }
 
 @Composable
-fun HostDialog(onDismiss: () -> Unit, onSave: (Host) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("22") }
-    var user by remember { mutableStateOf("root") }
-    var password by remember { mutableStateOf("") }
-    var key by remember { mutableStateOf("") }
+fun HostDialog(initial: Host?, onDismiss: () -> Unit, onSave: (Host) -> Unit) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var host by remember { mutableStateOf(initial?.host ?: "") }
+    var port by remember { mutableStateOf((initial?.port ?: 22).toString()) }
+    var user by remember { mutableStateOf(initial?.user ?: "") }
+    var password by remember { mutableStateOf(initial?.password ?: "") }
+    var key by remember { mutableStateOf(initial?.privateKey ?: "") }
+    var showPassword by remember { mutableStateOf(false) }
+
+    val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrect = false)
+    val valid = name.isNotBlank() && host.isNotBlank() && user.isNotBlank()
+    val serverChanged = initial != null &&
+        (host.trim() != initial.host || (port.toIntOrNull() ?: 22) != initial.port)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Novo servidor") },
+        title = { Text(if (initial == null) "Novo servidor" else "Editar servidor") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(name, { name = it }, label = { Text("Nome") }, singleLine = true)
-                OutlinedTextField(host, { host = it }, label = { Text("IP ou domínio") }, singleLine = true)
-                OutlinedTextField(port, { port = it.filter(Char::isDigit) }, label = { Text("Porta") }, singleLine = true)
-                OutlinedTextField(user, { user = it }, label = { Text("Usuário") }, singleLine = true)
+                OutlinedTextField(
+                    host, { host = it }, label = { Text("IP ou domínio") },
+                    singleLine = true, keyboardOptions = plain
+                )
+                OutlinedTextField(
+                    port, { port = it.filter(Char::isDigit) }, label = { Text("Porta") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    user, { user = it }, label = { Text("Usuário") },
+                    singleLine = true, keyboardOptions = plain
+                )
                 OutlinedTextField(
                     password, { password = it }, label = { Text("Senha (opcional)") },
-                    singleLine = true, visualTransformation = PasswordVisualTransformation()
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false,
+                        keyboardType = KeyboardType.Password
+                    )
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = showPassword, onCheckedChange = { showPassword = it })
+                    Text("Mostrar senha")
+                }
                 OutlinedTextField(
                     key, { key = it }, label = { Text("Chave privada PEM (opcional)") },
-                    minLines = 3, maxLines = 5
+                    minLines = 3, maxLines = 5, keyboardOptions = plain
                 )
+                if (serverChanged) {
+                    Text(
+                        "IP ou porta mudou: o fingerprint do servidor será confirmado de novo na próxima conexão.",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank() && host.isNotBlank() && user.isNotBlank()) {
-                    onSave(
-                        Host(
-                            name = name.trim(), host = host.trim(),
-                            port = port.toIntOrNull() ?: 22, user = user.trim(),
-                            password = password, privateKey = key.trim()
+            TextButton(
+                enabled = valid,
+                onClick = {
+                    val portNum = port.toIntOrNull() ?: 22
+                    val result = if (initial != null) {
+                        initial.copy(
+                            name = name.trim(),
+                            host = host.trim(),
+                            port = portNum,
+                            user = user.trim(),
+                            password = password,
+                            privateKey = key.trim(),
+                            fingerprint = if (serverChanged) "" else initial.fingerprint
                         )
-                    )
+                    } else {
+                        Host(
+                            name = name.trim(), host = host.trim(), port = portNum,
+                            user = user.trim(), password = password, privateKey = key.trim()
+                        )
+                    }
+                    onSave(result)
                 }
-            }) { Text("Salvar") }
+            ) { Text("Salvar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
@@ -265,6 +350,7 @@ fun HostScreen(host: Host, onBack: () -> Unit, onTrust: (Host) -> Unit) {
     var retry by remember { mutableStateOf<((Host) -> Unit)?>(null) }
     val commands = remember { CommandsState() }
     val terminals = remember { mutableStateListOf(TerminalState(1)) }
+    var activeTerm by remember { mutableStateOf(0) }
     val files = remember { SftpState() }
 
     DisposableEffect(Unit) {
@@ -317,8 +403,13 @@ fun HostScreen(host: Host, onBack: () -> Unit, onTrust: (Host) -> Unit) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 0 -> CommandsTab(current, commands, report)
-                1 -> TerminalsTab(current, terminals, report)
-                else -> FilesTab(current, files, report)
+                1 -> TerminalsTab(current, terminals, activeTerm, { activeTerm = it }, report)
+                else -> FilesTab(current, files, report) { path ->
+                    val next = (terminals.maxOfOrNull { it.number } ?: 0) + 1
+                    terminals.add(TerminalState(next, path))
+                    activeTerm = terminals.lastIndex
+                    tab = 1
+                }
             }
         }
     }

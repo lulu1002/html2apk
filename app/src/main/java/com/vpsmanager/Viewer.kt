@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +49,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 private const val MAX_IMAGE = 30 * 1024 * 1024
 private const val MAX_TEXT = 512 * 1024
@@ -83,29 +88,53 @@ fun kindOf(name: String): FileKind {
 fun FilesTab(
     host: Host,
     state: SftpState,
-    onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit
+    onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit,
+    onOpenTerminal: (String) -> Unit
 ) {
     var viewing by remember { mutableStateOf<RemoteFile?>(null) }
     val v = viewing
     if (v != null) {
         FileViewer(host, state, v, joinPath(state.path, v.name)) { viewing = null }
     } else {
-        FileBrowser(host, state, onUntrusted) { viewing = it }
+        FileBrowser(host, state, onUntrusted, onOpenTerminal) { viewing = it }
     }
 }
 
 @Composable
 fun FileViewer(host: Host, state: SftpState, file: RemoteFile, remote: String, onClose: () -> Unit) {
-    BackHandler(onBack = onClose)
     var forceText by remember { mutableStateOf(false) }
+    var dirty by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
     val kind = if (forceText) FileKind.TEXT else kindOf(file.name)
+
+    fun requestClose() {
+        if (dirty) confirmDiscard = true else onClose()
+    }
+    BackHandler(onBack = { requestClose() })
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Descartar alterações?") },
+            text = { Text("Você tem alterações não salvas neste arquivo.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDiscard = false
+                    onClose()
+                }) { Text("Descartar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Continuar editando") }
+            }
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onClose) { Text("Fechar") }
+            TextButton(onClick = { requestClose() }) { Text("Fechar") }
             Column(Modifier.weight(1f)) {
                 Text(
                     file.name,
@@ -122,7 +151,7 @@ fun FileViewer(host: Host, state: SftpState, file: RemoteFile, remote: String, o
                 FileKind.VIDEO -> MediaViewer(host, state, remote, isVideo = true)
                 FileKind.AUDIO -> MediaViewer(host, state, remote, isVideo = false)
                 FileKind.PDF -> PdfViewer(host, state, file, remote)
-                FileKind.TEXT -> TextViewer(host, state, file, remote)
+                FileKind.TEXT -> TextViewer(host, state, file, remote) { dirty = it }
                 FileKind.OTHER -> Column(
                     Modifier.fillMaxSize().padding(24.dp),
                     verticalArrangement = Arrangement.Center,
@@ -217,11 +246,42 @@ fun ImageViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) 
 
 // ---------------------------------------------------------------- Texto
 
+private const val MAX_EDIT = 256 * 1024
+
+/** Decodifica como UTF-8 e devolve null se houver bytes inválidos (evita corromper ao salvar). */
+private fun decodeStrict(bytes: ByteArray): String? = try {
+    Charsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
+        .decode(ByteBuffer.wrap(bytes))
+        .toString()
+} catch (_: CharacterCodingException) {
+    null
+}
+
 @Composable
-fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
+fun TextViewer(
+    host: Host,
+    state: SftpState,
+    file: RemoteFile,
+    remote: String,
+    onDirtyChange: (Boolean) -> Unit
+) {
+    val scope = rememberCoroutineScope()
     var lines by remember { mutableStateOf<List<String>?>(null) }
+    var original by remember { mutableStateOf("") }
+    var canEdit by remember { mutableStateOf(false) }
+    var crlf by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var saveMsg by remember { mutableStateOf("") }
+    var confirmExit by remember { mutableStateOf(false) }
+
+    val dirty = editing && draft != original
+    LaunchedEffect(dirty) { onDirtyChange(dirty) }
 
     LaunchedEffect(remote) {
         try {
@@ -230,27 +290,123 @@ fun TextViewer(host: Host, state: SftpState, file: RemoteFile, remote: String) {
                 errorMsg = "Arquivo binário: não dá para exibir como texto."
                 return@LaunchedEffect
             }
-            val text = String(bytes, Charsets.UTF_8).replace("\r", "")
-            lines = text.split('\n')
-            if (file.size > MAX_TEXT) {
-                note = "Mostrando só os primeiros ${humanSize(MAX_TEXT.toLong())} de ${humanSize(file.size)}."
+            val strict = decodeStrict(bytes)
+            val text = strict ?: String(bytes, Charsets.UTF_8)
+            val truncated = file.size > MAX_TEXT
+            crlf = text.contains("\r\n")
+            val normalized = text.replace("\r\n", "\n")
+            original = normalized
+            lines = normalized.replace("\r", "").split('\n')
+            canEdit = strict != null && !truncated && file.size <= MAX_EDIT && !normalized.contains('\r')
+            note = when {
+                truncated -> "Mostrando só os primeiros ${humanSize(MAX_TEXT.toLong())} de ${humanSize(file.size)} (somente leitura)."
+                file.size > MAX_EDIT -> "Arquivo maior que ${humanSize(MAX_EDIT.toLong())}: somente leitura."
+                strict == null -> "Codificação diferente de UTF-8: somente leitura."
+                !canEdit -> "Somente leitura."
+                else -> ""
             }
         } catch (e: Exception) {
             errorMsg = e.message ?: "Erro ao ler o arquivo"
         }
     }
 
+    fun save() {
+        scope.launch {
+            saving = true
+            saveMsg = ""
+            try {
+                val out = if (crlf) draft.replace("\n", "\r\n") else draft
+                state.writeBytes(host, remote, out.toByteArray(Charsets.UTF_8))
+                original = draft
+                lines = draft.replace("\r", "").split('\n')
+                saveMsg = "Salvo ✓"
+            } catch (e: Exception) {
+                saveMsg = "Erro ao salvar: ${e.message}"
+            }
+            saving = false
+        }
+    }
+
+    if (confirmExit) {
+        AlertDialog(
+            onDismissRequest = { confirmExit = false },
+            title = { Text("Sair da edição?") },
+            text = { Text("As alterações não salvas serão perdidas.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmExit = false
+                    editing = false
+                    saveMsg = ""
+                }) { Text("Descartar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmExit = false }) { Text("Continuar") } }
+        )
+    }
+
     val l = lines
     when {
         errorMsg != null -> CenteredText(errorMsg!!, isError = true)
         l == null -> CenteredLoading("Carregando…")
-        else -> Column(Modifier.fillMaxSize()) {
-            if (note.isNotBlank()) {
+        editing -> Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    note,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    when {
+                        saveMsg.isNotBlank() -> saveMsg
+                        dirty -> "● alterado"
+                        else -> "editando"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Button(onClick = { save() }, enabled = dirty && !saving) {
+                    Text(if (saving) "Salvando…" else "Salvar")
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    if (dirty) confirmExit = true else {
+                        editing = false
+                        saveMsg = ""
+                    }
+                }) { Text("Sair") }
+            }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = {
+                    draft = it
+                    saveMsg = ""
+                },
+                modifier = Modifier.fillMaxSize().padding(8.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false
+                )
+            )
+        }
+        else -> Column(Modifier.fillMaxSize()) {
+            if (note.isNotBlank() || canEdit) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (note.isNotBlank()) note else saveMsg,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (canEdit) {
+                        Button(onClick = {
+                            draft = original
+                            saveMsg = ""
+                            editing = true
+                        }) { Text("Editar") }
+                    }
+                }
             }
             SelectionContainer {
                 LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {

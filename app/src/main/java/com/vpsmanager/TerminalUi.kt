@@ -1,5 +1,6 @@
 package com.vpsmanager
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -14,7 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -39,18 +44,19 @@ private val keyButtons = listOf(
 fun TerminalsTab(
     host: Host,
     terminals: SnapshotStateList<TerminalState>,
+    active: Int,
+    onActiveChange: (Int) -> Unit,
     onUntrusted: (HostKeyException, (Host) -> Unit) -> Unit
 ) {
     val context = LocalContext.current
     val settings = remember { TerminalSettings(context) }
-    var active by remember { mutableStateOf(0) }
     val idx = active.coerceIn(0, terminals.lastIndex)
 
     fun closeTab(i: Int) {
         if (terminals.size <= 1) return
         val t = terminals.removeAt(i)
         t.close()
-        active = (if (i <= idx) idx - 1 else idx).coerceAtLeast(0)
+        onActiveChange((if (i <= idx) idx - 1 else idx).coerceAtLeast(0))
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -58,10 +64,16 @@ fun TerminalsTab(
             terminals.forEachIndexed { i, t ->
                 Tab(
                     selected = i == idx,
-                    onClick = { active = i },
+                    onClick = { onActiveChange(i) },
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Terminal ${t.number}")
+                            Text(
+                                buildString {
+                                    append("Terminal ${t.number}")
+                                    t.dirName?.let { append(" · $it") }
+                                },
+                                maxLines = 1
+                            )
                             if (terminals.size > 1) {
                                 Spacer(Modifier.width(8.dp))
                                 Text("✕", modifier = Modifier.clickable { closeTab(i) })
@@ -75,7 +87,7 @@ fun TerminalsTab(
                 onClick = {
                     val next = (terminals.maxOfOrNull { it.number } ?: 0) + 1
                     terminals.add(TerminalState(next))
-                    active = terminals.lastIndex
+                    onActiveChange(terminals.lastIndex)
                 },
                 text = { Text("＋ Novo") }
             )
@@ -96,6 +108,8 @@ fun TerminalTab(
     val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
     var showShortcuts by remember { mutableStateOf(false) }
+    var showThemes by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
     val scroll = rememberScrollState()
 
     fun connect(h: Host) {
@@ -116,7 +130,7 @@ fun TerminalTab(
             connect(host)
         }
     }
-    LaunchedEffect(settings.highlight) { state.applyHighlight(settings.highlight) }
+    LaunchedEffect(settings.highlight, settings.themeIndex) { state.applyStyle(settings.highlight, settings.theme) }
     LaunchedEffect(state.text.length) { scroll.scrollTo(scroll.maxValue) }
 
     fun sendLine() {
@@ -125,9 +139,10 @@ fun TerminalTab(
     }
 
     if (showShortcuts) ShortcutsDialog(settings) { showShortcuts = false }
+    if (showThemes) ThemeDialog(settings) { showThemes = false }
 
     Column(
-        Modifier.fillMaxSize().padding(12.dp),
+        Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -145,16 +160,48 @@ fun TerminalTab(
             if (!state.connected) {
                 TextButton(onClick = { connect(host) }, enabled = !state.connecting) { Text("Conectar") }
             }
-            Text("Realce", style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(4.dp))
-            Switch(checked = settings.highlight, onCheckedChange = { settings.updateHighlight(it) })
-            TextButton(onClick = { settings.changeFont(-1) }) { Text("A−") }
-            TextButton(onClick = { settings.changeFont(1) }) { Text("A+") }
+            Box {
+                IconButton(onClick = { menu = true }) { Text("⋮", fontSize = 22.sp) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Realce de sintaxe") },
+                        trailingIcon = { Switch(checked = settings.highlight, onCheckedChange = null) },
+                        onClick = { settings.updateHighlight(!settings.highlight) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Fonte maior (${settings.fontSize})") },
+                        onClick = { settings.changeFont(1) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Fonte menor (${settings.fontSize})") },
+                        onClick = { settings.changeFont(-1) }
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Tema: ${settings.theme.name}…") },
+                        onClick = { menu = false; showThemes = true }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Atalhos personalizados…") },
+                        onClick = { menu = false; showShortcuts = true }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Limpar tela") },
+                        onClick = { menu = false; state.send("\u000C") }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Reconectar") },
+                        enabled = !state.connected && !state.connecting,
+                        onClick = { menu = false; connect(host) }
+                    )
+                }
+            }
         }
-        Surface(tonalElevation = 3.dp, modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Surface(color = Color(settings.theme.bg), modifier = Modifier.weight(1f).fillMaxWidth()) {
             SelectionContainer {
                 Text(
                     state.text,
+                    color = Color(settings.theme.fg),
                     fontFamily = FontFamily.Monospace,
                     fontSize = settings.fontSize.sp,
                     modifier = Modifier.verticalScroll(scroll).padding(8.dp)
@@ -279,6 +326,46 @@ fun ShortcutsDialog(settings: TerminalSettings, onDismiss: () -> Unit) {
                         reset()
                     }
                 }) { Text(if (editingId == null) "Adicionar" else "Salvar") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } }
+    )
+}
+
+@Composable
+fun ThemeDialog(settings: TerminalSettings, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tema do terminal") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TerminalThemes.all.forEachIndexed { i, t ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { settings.selectTheme(i) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = settings.themeIndex == i, onClick = { settings.selectTheme(i) })
+                        Column(Modifier.weight(1f).background(Color(t.bg)).padding(8.dp)) {
+                            Text(
+                                t.name,
+                                color = Color(t.fg),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                buildAnnotatedString {
+                                    for (k in 1..6) {
+                                        withStyle(SpanStyle(color = t.ansi(k))) { append("● ") }
+                                    }
+                                },
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } }
