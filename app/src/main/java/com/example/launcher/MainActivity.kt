@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -25,6 +26,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -54,6 +56,11 @@ class MainActivity : Activity() {
     private lateinit var recycler: RecyclerView
     private lateinit var grid: GridLayoutManager
     private lateinit var dock: LinearLayout
+    private lateinit var frame: FrameLayout
+    private lateinit var wallpaperView: ImageView
+    private lateinit var dimView: View
+    private var wallpaperStamp = -1L
+    private var textColor = Color.BLACK
 
     private val adapter = AppAdapter()
     private var all: List<AppEntry> = emptyList()
@@ -107,6 +114,9 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (query.isNotEmpty()) {
             search.setText("")
+        } else if (prefs.isHomeAllowed()) {
+            // Como tela inicial, fechar a activity faria o sistema reabri-la; só minimiza.
+            moveTaskToBack(true)
         } else {
             @Suppress("DEPRECATION")
             super.onBackPressed()
@@ -171,19 +181,56 @@ class MainActivity : Activity() {
         root.addView(top)
         root.addView(recycler, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(dock)
-        setContentView(root)
+
+        // Camadas: imagem de fundo -> escurecimento -> conteúdo
+        wallpaperView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        dimView = View(this)
+        frame = FrameLayout(this)
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        frame.addView(wallpaperView, FrameLayout.LayoutParams(match, match))
+        frame.addView(dimView, FrameLayout.LayoutParams(match, match))
+        frame.addView(root, FrameLayout.LayoutParams(match, match))
+        setContentView(frame)
+    }
+
+    /** Cor das superfícies (busca/dock): levemente translúcida quando há imagem de fundo. */
+    private fun surfaceColor(): Int {
+        val s = prefs.surface()
+        return if (prefs.hasWallpaper()) {
+            Color.argb(210, Color.red(s), Color.green(s), Color.blue(s))
+        } else {
+            s
+        }
     }
 
     @Suppress("DEPRECATION")
     private fun applyPrefs() {
         val bg = prefs.bg()
         val fg = prefs.fg()
-        root.setBackgroundColor(bg)
+        val wp = prefs.hasWallpaper()
+        frame.setBackgroundColor(bg)
+        if (wp) {
+            val file = prefs.wallpaperFile()
+            val stamp = file.lastModified()
+            if (stamp != wallpaperStamp) {
+                wallpaperView.setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
+                wallpaperStamp = stamp
+            }
+            wallpaperView.visibility = View.VISIBLE
+            dimView.visibility = View.VISIBLE
+            dimView.setBackgroundColor(Color.argb(prefs.dim * 255 / 100, 0, 0, 0))
+        } else {
+            wallpaperView.visibility = View.GONE
+            dimView.visibility = View.GONE
+            wallpaperView.setImageDrawable(null)
+            wallpaperStamp = -1L
+        }
+        textColor = if (wp) Color.WHITE else fg
         window.statusBarColor = bg
         window.navigationBarColor = bg
 
         var flags = 0
-        if (!prefs.isDark()) {
+        if (!prefs.isDark() && !wp) {
             flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
             flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         }
@@ -193,7 +240,7 @@ class MainActivity : Activity() {
         search.setHintTextColor(Color.argb(136, Color.red(fg), Color.green(fg), Color.blue(fg)))
         search.background = GradientDrawable().apply {
             cornerRadius = dp(24).toFloat()
-            setColor(prefs.surface())
+            setColor(surfaceColor())
             setStroke(dp(1), prefs.accentColor())
         }
         search.setPadding(dp(18), dp(10), dp(18), dp(10))
@@ -254,7 +301,7 @@ class MainActivity : Activity() {
             .mapNotNull { p -> all.firstOrNull { it.pkg == p && it.pkg !in hidden } }
             .take(5)
         dock.visibility = if (prefs.showDock && apps.isNotEmpty()) View.VISIBLE else View.GONE
-        dock.setBackgroundColor(prefs.surface())
+        dock.setBackgroundColor(surfaceColor())
         for (a in apps) {
             val iv = ImageView(this).apply {
                 setImageDrawable(a.icon)
@@ -370,7 +417,7 @@ class MainActivity : Activity() {
             h.iv.layoutParams = LinearLayout.LayoutParams(dp(prefs.iconSize), dp(prefs.iconSize))
             h.iv.setImageDrawable(a.icon)
             h.tv.text = a.label
-            h.tv.setTextColor(prefs.fg())
+            h.tv.setTextColor(textColor)
             h.tv.visibility = if (prefs.showLabels) View.VISIBLE else View.GONE
             h.box.setOnClickListener { launch(a) }
             h.box.setOnLongClickListener {

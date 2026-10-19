@@ -9,8 +9,10 @@ substitui o seu launcher atual. Voltar sai dele.
 - Dock com até 5 apps fixados
 - Personalização: tema (sistema/claro/escuro/AMOLED), cor de destaque, colunas (3–6),
   tamanho do ícone, nomes dos apps, ordenação, fechar ao abrir app
+- **Imagem de fundo** da galeria, com controle de escurecimento (e botão para remover)
 - Segure um app: fixar/desafixar, ocultar, informações, desinstalar
 - Atualiza sozinho ao instalar/remover apps
+- **Launcher padrão opcional**: em Personalizar, ligue "Permitir usar como tela inicial" e use o botão para escolher no sistema. Desligado por padrão; desligar volta ao modo de app comum
 
 ## Compilar no GitHub Actions
 1. Crie um repositório e envie esta pasta (o arquivo `.github/workflows/build.yml` já está incluso).

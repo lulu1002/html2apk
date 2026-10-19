@@ -1,8 +1,11 @@
 package com.example.launcher
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import java.io.File
 
 class Prefs(private val ctx: Context) {
 
@@ -80,7 +83,37 @@ class Prefs(private val ctx: Context) {
 
     fun surface(): Int = if (isDark()) 0xFF1E1E1E.toInt() else 0xFFFFFFFF.toInt()
 
+    private val homeAlias = ComponentName(ctx, "com.example.launcher.HomeAlias")
+
+    /** True quando o launcher está habilitado para aparecer como opção de tela inicial. */
+    fun isHomeAllowed(): Boolean =
+        ctx.packageManager.getComponentEnabledSetting(homeAlias) ==
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+
+    fun setHomeAllowed(on: Boolean) {
+        ctx.packageManager.setComponentEnabledSetting(
+            homeAlias,
+            if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            else PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+            PackageManager.DONT_KILL_APP
+        )
+    }
+
+    var dim: Int
+        get() = sp.getInt("dim", 30)
+        set(v) { sp.edit().putInt("dim", v).apply() }
+
+    fun wallpaperFile(): File = File(ctx.filesDir, "wallpaper.jpg")
+
+    fun hasWallpaper(): Boolean = wallpaperFile().exists()
+
+    fun clearWallpaper() {
+        wallpaperFile().delete()
+    }
+
     fun reset() {
+        clearWallpaper()
         sp.edit().clear().apply()
+        setHomeAllowed(false)
     }
 }
