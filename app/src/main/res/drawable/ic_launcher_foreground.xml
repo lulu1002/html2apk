@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- escudo -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 L73,37 V54 C73,67 64,75 54,80 C44,75 35,67 35,54 V37 Z" />
+    <!-- buraco da fechadura -->
+    <path
+        android:fillColor="#00796B"
+        android:pathData="M54,47m-5,0a5,5 0 1,0 10,0a5,5 0 1,0 -10,0" />
+    <path
+        android:fillColor="#00796B"
+        android:pathData="M52.5,50h3v10h-3z" />
+</vector>

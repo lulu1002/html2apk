@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WifiScout"
+rootProject.name = "WgTunnel"
 include(":app")
