@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "DevToolbox"
+rootProject.name = "MeuLauncher"
 include(":app")

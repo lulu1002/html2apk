@@ -1,21 +1,28 @@
-# Dev Toolbox
+# Meu Launcher
 
-App Android (Kotlin, sem bibliotecas externas) com ferramentas para desenvolvedores:
+Launcher de apps para Android, personalizável e **não permanente**: não se registra como tela
+inicial (sem categoria `HOME`), então aparece na gaveta de apps como qualquer app e nunca
+substitui o seu launcher atual. Voltar sai dele.
 
-- **GitHub**: repositórios, Actions (status dos builds, jobs/etapas com falha, re-executar, cancelar),
-  issues, pull requests, navegador de código, releases.
-  **Edição:** editar/criar/mover/excluir arquivos, enviar arquivos do celular, enviar projeto .zip (um único commit),
-  criar/trocar branch e criar repositório.
-- **Rede**: scanner da rede local (+ portas abertas por dispositivo), ping, DNS, teste de portas, IP.
-- **Cliente de API** com histórico, **JSON/XML**, **conversores** (Base64, URL, hex, hashes, timestamp, JWT, UUID),
-  **regex**, **cores**, **monitor de sites** e **cheat sheets**.
+## Recursos
+- **Tela inicial** com relógio, data, apps recentes/mais usados, dock e um botão **Apps** (ou deslize para cima) que abre a lista; Voltar na lista volta para a tela inicial. Dá para ligar "Abrir direto na lista de apps" em Personalizar
+- Lista de apps com busca (Enter abre o primeiro resultado)
+- Dock com até 5 apps fixados
+- Personalização: tema (sistema/claro/escuro/AMOLED), cor de destaque, colunas (3–6),
+  tamanho do ícone, nomes dos apps, ordenação, fechar ao abrir app
+- **Imagem de fundo** da galeria, com controle de escurecimento (e botão para remover)
+- **Pastas**: segure um app > "Mover para pasta"; toque na pasta para abrir; segure a pasta para renomear/excluir
+- **Gestos** configuráveis (deslizar para baixo/cima, toque duplo): buscar, bloquear a tela, abrir Personalizar, abrir notificações
+- **Linha rápida** no topo com os apps recentes ou mais usados (e ordenação por mais usados)
+- **Bloqueio por app**: segure um app > "Bloquear com senha/digital" (usa a senha, PIN, padrão ou digital do próprio celular). Vale para abrir pelo launcher; Personalizar também pede a senha quando há apps bloqueados
+- **Backup**: exporta/importa todas as configurações (e a imagem de fundo) em um arquivo JSON
+- Segure um app: fixar/desafixar, pasta, bloqueio, ocultar, informações, desinstalar
+- Atualiza sozinho ao instalar/remover apps
+- **Launcher padrão opcional**: em Personalizar, ligue "Permitir usar como tela inicial" e use o botão para escolher no sistema. Desligado por padrão; desligar volta ao modo de app comum
 
-## Compilar pelo GitHub Actions
-1. Envie estes arquivos para um repositório (branch `main`).
-2. Aba **Actions** → **Build APK (Dev Toolbox)** → baixe o artefato **devtools-apk**.
+## Compilar no GitHub Actions
+1. Crie um repositório e envie esta pasta (o arquivo `.github/workflows/build.yml` já está incluso).
+2. Aba **Actions** → workflow **Build APK** (roda a cada push; ou clique em *Run workflow*).
+3. Ao terminar, baixe o artefato **MeuLauncher-debug** (contém o `.apk` assinado com chave de debug).
 
-## Token do GitHub
-Opcional para repositórios públicos. Para repos privados ou re-executar builds, crie um token fine-grained em
-GitHub → Settings → Developer settings. Para editar e enviar código: **Contents: Read and write**; para builds: **Actions: Read and write**;
-para alterar `.github/workflows`: **Workflows: Read and write**. Criar repositório pode exigir token clássico com escopo `repo`.
-O token fica salvo apenas no armazenamento privado do app.
+Stack: Kotlin, AGP 8.5.2, Gradle 8.7, JDK 17, minSdk 26, targetSdk 34.

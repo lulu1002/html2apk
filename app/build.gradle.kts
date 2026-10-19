@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.exemplo.devtools"
+    namespace = "com.example.launcher"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.exemplo.devtools"
-        minSdk = 24
+        applicationId = "com.example.launcher"
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -18,14 +18,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Assinado com a chave debug para o APK de release ser instalavel direto.
-            signingConfig = signingConfigs.getByName("debug")
         }
-    }
-
-    lint {
-        abortOnError = false
-        checkReleaseBuilds = false
     }
 
     compileOptions {
@@ -38,6 +31,5 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 }

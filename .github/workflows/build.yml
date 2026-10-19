@@ -1,8 +1,8 @@
-name: Build APK (Dev Toolbox)
+name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
@@ -17,18 +17,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Instala o Gradle diretamente (nao precisa do gradle-wrapper.jar no repositorio)
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Compilar APKs
-        run: gradle assembleDebug assembleRelease --stacktrace
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
 
-      - name: Enviar APKs
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: devtools-apk
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+          name: MeuLauncher-debug
+          path: app/build/outputs/apk/debug/*.apk
