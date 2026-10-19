@@ -1,22 +1,12 @@
-# Meu Launcher
+# Rádio (streaming)
 
-Launcher de apps para Android, personalizável e **não permanente**: não se registra como tela
-inicial (sem categoria `HOME`), então aparece na gaveta de apps como qualquer app e nunca
-substitui o seu launcher atual. Voltar sai dele.
+App Android (Kotlin + Media3/ExoPlayer) com lista de estações, favoritas, anterior/próxima,
+timer para desligar, notificação com controles e reprodução em segundo plano.
 
-## Recursos
-- Grade de apps com busca (Enter abre o primeiro resultado)
-- Dock com até 5 apps fixados
-- Personalização: tema (sistema/claro/escuro/AMOLED), cor de destaque, colunas (3–6),
-  tamanho do ícone, nomes dos apps, ordenação, fechar ao abrir app
-- **Imagem de fundo** da galeria, com controle de escurecimento (e botão para remover)
-- Segure um app: fixar/desafixar, ocultar, informações, desinstalar
-- Atualiza sozinho ao instalar/remover apps
-- **Launcher padrão opcional**: em Personalizar, ligue "Permitir usar como tela inicial" e use o botão para escolher no sistema. Desligado por padrão; desligar volta ao modo de app comum
+## Compilar pelo GitHub Actions
+1. Crie um repositório e envie estes arquivos (push na branch `main`).
+2. Aba **Actions** → workflow **Build APK** (roda sozinho a cada push, ou clique em *Run workflow*).
+3. Ao terminar, baixe o artefato **radio-apk** (contém `app-debug.apk` e `app-release.apk`).
 
-## Compilar no GitHub Actions
-1. Crie um repositório e envie esta pasta (o arquivo `.github/workflows/build.yml` já está incluso).
-2. Aba **Actions** → workflow **Build APK** (roda a cada push; ou clique em *Run workflow*).
-3. Ao terminar, baixe o artefato **MeuLauncher-debug** (contém o `.apk` assinado com chave de debug).
-
-Stack: Kotlin, AGP 8.5.2, Gradle 8.7, JDK 17, minSdk 26, targetSdk 34.
+## Compilar localmente
+Com Gradle 8.7+ e JDK 17: `gradle assembleDebug`

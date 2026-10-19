@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.launcher"
+    namespace = "com.exemplo.radio"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.launcher"
-        minSdk = 26
+        applicationId = "com.exemplo.radio"
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -18,6 +18,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Assinado com a chave debug para o APK de release ser instalavel direto.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -31,5 +33,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-session:1.3.1")
+    implementation("androidx.core:core-ktx:1.13.1")
 }
