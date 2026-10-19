@@ -22,6 +22,19 @@ class MainActivity : Activity() {
 
     val prefs by lazy { getSharedPreferences("devtoolbox", Context.MODE_PRIVATE) }
 
+    /** Callback do seletor de arquivos (ACTION_OPEN_DOCUMENT). */
+    var resultCallback: ((Int, Intent?) -> Unit)? = null
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 4242) {
+            val cb = resultCallback
+            resultCallback = null
+            cb?.invoke(resultCode, data)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

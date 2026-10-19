@@ -1,9 +1,11 @@
 package com.exemplo.devtools
 
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 object Http {
 
@@ -15,6 +17,8 @@ object Http {
         val bytes: Int
     )
 
+    private val base = OkHttpClient()
+
     fun request(
         method: String,
         url: String,
@@ -23,48 +27,39 @@ object Http {
         timeoutMs: Int = 15_000,
         followRedirects: Boolean = true
     ): Resp {
+        val m = method.uppercase()
+        val client = base.newBuilder()
+            .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .writeTimeout(60_000, TimeUnit.MILLISECONDS)
+            .followRedirects(followRedirects)
+            .followSslRedirects(followRedirects)
+            .build()
+
+        val contentType = headers.entries
+            .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value
+            ?: "application/json; charset=utf-8"
+
+        val reqBody: RequestBody? = when (m) {
+            "POST", "PUT", "PATCH" -> (body ?: "").toRequestBody(contentType.toMediaTypeOrNull())
+            "DELETE" -> body?.toRequestBody(contentType.toMediaTypeOrNull())
+            else -> null
+        }
+
+        val req = Request.Builder().url(url).method(m, reqBody).apply {
+            for ((k, v) in headers) if (!k.equals("Content-Type", ignoreCase = true)) header(k, v)
+        }.build()
+
         val t0 = System.currentTimeMillis()
-        val conn = URL(url).openConnection() as HttpURLConnection
-        try {
-            conn.connectTimeout = timeoutMs
-            conn.readTimeout = timeoutMs
-            conn.instanceFollowRedirects = followRedirects
-
-            var m = method.uppercase()
-            if (m == "PATCH") { // HttpURLConnection não suporta PATCH: usa override
-                m = "POST"
-                conn.setRequestProperty("X-HTTP-Method-Override", "PATCH")
-            }
-            conn.requestMethod = m
-            for ((k, v) in headers) conn.setRequestProperty(k, v)
-
-            if (body != null && (m == "POST" || m == "PUT")) {
-                conn.doOutput = true
-                conn.outputStream.use { it.write(body.toByteArray()) }
-            }
-
-            val code = conn.responseCode
-            val stream = if (code >= 400) conn.errorStream else conn.inputStream
-            val bytes = stream?.use { readLimited(it) } ?: ByteArray(0)
-
-            val hf = HashMap<String, List<String>>()
-            for ((k, v) in conn.headerFields) if (k != null) hf[k] = v
-
-            return Resp(code, hf, String(bytes, Charsets.UTF_8), System.currentTimeMillis() - t0, bytes.size)
-        } finally {
-            conn.disconnect()
+        return client.newCall(req).execute().use { resp ->
+            val bytes = resp.peekBody(2_000_000).bytes()
+            Resp(
+                resp.code,
+                resp.headers.toMultimap(),
+                String(bytes, Charsets.UTF_8),
+                System.currentTimeMillis() - t0,
+                bytes.size
+            )
         }
-    }
-
-    private fun readLimited(s: InputStream, max: Int = 2_000_000): ByteArray {
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(8192)
-        while (true) {
-            val n = s.read(buf)
-            if (n < 0) break
-            out.write(buf, 0, n)
-            if (out.size() >= max) break
-        }
-        return out.toByteArray()
     }
 }

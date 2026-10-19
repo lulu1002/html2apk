@@ -40,8 +40,9 @@ object GH {
         val hint = when {
             r.code == 401 -> " (token inválido ou expirado)"
             r.code == 403 && msg.contains("rate limit", true) -> " (limite de requisições: salve um token para aumentar)"
-            r.code == 403 -> " (sem permissão: confira os escopos do token)"
-            r.code == 404 -> " (não encontrado — repo privado exige token)"
+            msg.contains("workflow", true) -> " (para alterar .github/workflows o token precisa de Workflows: Read and write, ou escopo workflow)"
+            r.code == 403 -> " (sem permissão: o token precisa de Contents: Read and write para alterar código)"
+            r.code == 404 -> " (não encontrado — ou o token não tem acesso/permissão neste repositório)"
             else -> ""
         }
         return "HTTP ${r.code}: $msg$hint"
@@ -146,6 +147,7 @@ fun MainActivity.githubHome(): View {
             else -> toast("Digite um usuário ou salve um token")
         }
     })
+    box.add(btn("➕ Criar repositório") { createRepoDialog() })
     box.add(btn("Buscar repositórios no GitHub") {
         val q = repoIn.text.toString().trim()
         if (q.isEmpty()) toast("Digite o termo de busca")
@@ -177,7 +179,8 @@ fun MainActivity.repoScreen(repo: String) {
     box.add(btn("🛠  Actions (builds)") { actionsScreen(repo) })
     box.add(btn("🐞  Issues") { issuesScreen(repo, "open", false) })
     box.add(btn("🔀  Pull requests") { issuesScreen(repo, "open", true) })
-    box.add(btn("📁  Código") { codeScreen(repo, "") })
+    box.add(btn("📁  Código (editar e enviar arquivos)") { codeScreen(repo, "") })
+    box.add(btn("🌿  Trocar / criar branch") { branchDialog(repo) })
     box.add(btn("📦  Releases") { releasesScreen(repo) })
     box.add(btn("ℹ️  Informações") {
         textScreen("Info • $repo", "https://github.com/$repo") {
@@ -313,40 +316,6 @@ private fun MainActivity.issueDetail(repo: String, num: Int, title: String, body
             sb.appendLine(c.str("body"))
         }
         sb.toString()
-    }
-}
-
-// ---------------------------------------------------------------- Código
-
-fun MainActivity.codeScreen(repo: String, path: String) {
-    listScreen("/$path • $repo") {
-        val v = GH.json(this, "/repos/$repo/contents${encPath(path)}")
-        val arr = v as? JSONArray ?: throw IOException("Não é uma pasta")
-        val list = (0 until arr.length()).map { arr.getJSONObject(it) }
-            .sortedWith(compareBy({ it.str("type") != "dir" }, { it.str("name").lowercase() }))
-        list.map { o ->
-            val p = o.str("path")
-            if (o.str("type") == "dir") Item("📁 ${o.str("name")}", "", BLUE) { codeScreen(repo, p) }
-            else Item("📄 ${o.str("name")}", fmtSize(o.optLong("size"))) {
-                fileScreen(repo, p, o.optLong("size"), o.str("html_url"))
-            }
-        }
-    }
-}
-
-private fun encPath(path: String): String {
-    val parts = path.split('/').filter { it.isNotEmpty() }
-    return if (parts.isEmpty()) "" else "/" + parts.joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
-}
-
-private fun MainActivity.fileScreen(repo: String, path: String, size: Long, htmlUrl: String) {
-    textScreen(path.substringAfterLast('/'), htmlUrl, mono = true) {
-        if (size > 400_000) return@textScreen "Arquivo grande demais para exibir (${fmtSize(size)}). Abra no navegador."
-        val o = GH.json(this, "/repos/$repo/contents${encPath(path)}") as JSONObject
-        val bytes = Base64.decode(o.str("content").replace("\n", ""), Base64.DEFAULT)
-        val binary = bytes.take(1000).count { it.toInt() in 0..8 || it.toInt() in 14..31 } > 5
-        if (binary) "Arquivo binário (${fmtSize(size)}). Abra no navegador."
-        else String(bytes, Charsets.UTF_8).take(100_000)
     }
 }
 
