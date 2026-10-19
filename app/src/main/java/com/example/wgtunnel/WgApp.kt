@@ -1,6 +1,8 @@
 package com.example.wgtunnel
 
 import android.app.Application
+import android.content.ComponentName
+import android.service.quicksettings.TileService
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import java.io.File
@@ -52,7 +54,21 @@ class WgApp : Application() {
     private val tunnels = HashMap<String, AppTunnel>()
 
     fun tunnel(name: String): AppTunnel = synchronized(tunnels) {
-        tunnels.getOrPut(name) { AppTunnel(name) { onChange?.invoke() } }
+        tunnels.getOrPut(name) {
+            AppTunnel(name) {
+                onChange?.invoke()
+                refreshSurfaces()
+            }
+        }
+    }
+
+    /** Atualiza o tile das configurações rápidas e os widgets. */
+    fun refreshSurfaces() {
+        try {
+            TileService.requestListeningState(this, ComponentName(this, VpnTileService::class.java))
+            WidgetProvider.updateAll(this)
+        } catch (_: Exception) {
+        }
     }
 
     fun forget(name: String) {

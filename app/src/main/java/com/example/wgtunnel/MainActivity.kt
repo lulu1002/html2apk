@@ -175,6 +175,7 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
+        if (up) TunnelToggler.remember(this, name)
         val tunnel = app.tunnel(name)
         app.io.execute {
             try {

@@ -7,6 +7,7 @@ Usa a biblioteca oficial `com.wireguard.android:tunnel` (wireguard-go embutido).
 - Lista de túneis com chave liga/desliga e contadores de tráfego (↓/↑) ao vivo
 - Importar arquivo `.conf` ou criar túnel do zero (gera a chave privada e mostra a pública)
 - Editar, exportar e excluir (toque longo no túnel abre o menu)
+- Atalho nas configurações rápidas (tile) e widget na tela inicial para ligar/desligar o último túnel usado
 - Tema claro/escuro automático
 
 ## Como compilar no GitHub Actions
@@ -20,4 +21,4 @@ O APK de release é assinado com a chave de debug, então instala direto. Para p
 Precisa de JDK 17, Android SDK e Gradle 8.9+: `gradle assembleDebug`.
 
 ## Não incluído (comparado ao app oficial)
-Importar por QR code, tile de configurações rápidas, iniciar no boot, split tunneling por app, backend de kernel/root.
+Importar por QR code, iniciar no boot, split tunneling por app, backend de kernel/root.

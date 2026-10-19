@@ -26,4 +26,7 @@
     <string name="public_key_fmt">Chave pública (toque para copiar):\n%1$s</string>
     <string name="public_key_none">Chave pública: defina uma PrivateKey válida</string>
     <string name="copied">Copiado</string>
+    <string name="widget_desc">Liga/desliga o último túnel usado</string>
+    <string name="open_app_first">Abra o app e conecte um túnel uma vez para conceder a permissão de VPN</string>
+    <string name="no_tunnel">Crie um túnel primeiro</string>
 </resources>
