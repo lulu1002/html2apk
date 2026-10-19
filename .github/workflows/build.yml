@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK (TV)
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
       - name: Enviar APKs
         uses: actions/upload-artifact@v4
         with:
-          name: radio-apk
+          name: tv-apk
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
