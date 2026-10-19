@@ -9,6 +9,10 @@ import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 class Prefs(private val ctx: Context) {
 
@@ -75,6 +79,45 @@ class Prefs(private val ctx: Context) {
         get() = HashSet(sp.getStringSet("locked", emptySet()) ?: emptySet())
         set(v) { sp.edit().putStringSet("locked", HashSet(v)).apply() }
 
+    /** 0 = senha/digital do celular, 1 = senha própria deste launcher. */
+    var lockMode: Int
+        get() = sp.getInt("lockMode", 0)
+        set(v) { sp.edit().putInt("lockMode", v).apply() }
+
+    fun hasPin(): Boolean = sp.contains("pin_hash") && sp.contains("pin_salt")
+
+    /** Guarda só o hash (PBKDF2 + sal aleatório); a senha em si nunca é salva. */
+    fun setPin(pin: String) {
+        val salt = ByteArray(16)
+        SecureRandom().nextBytes(salt)
+        sp.edit()
+            .putString("pin_salt", Base64.encodeToString(salt, Base64.NO_WRAP))
+            .putString("pin_hash", Base64.encodeToString(hashPin(pin, salt), Base64.NO_WRAP))
+            .apply()
+    }
+
+    fun checkPin(pin: String): Boolean {
+        val s = sp.getString("pin_salt", null) ?: return false
+        val h = sp.getString("pin_hash", null) ?: return false
+        return try {
+            MessageDigest.isEqual(
+                hashPin(pin, Base64.decode(s, Base64.NO_WRAP)),
+                Base64.decode(h, Base64.NO_WRAP)
+            )
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun clearPin() {
+        sp.edit().remove("pin_salt").remove("pin_hash").apply()
+    }
+
+    private fun hashPin(pin: String, salt: ByteArray): ByteArray {
+        val spec = PBEKeySpec(pin.toCharArray(), salt, 60000, 256)
+        return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).encoded
+    }
+
     // ---- Pastas
 
     fun folders(): LinkedHashMap<String, MutableList<String>> {
@@ -107,6 +150,8 @@ class Prefs(private val ctx: Context) {
         root.put("version", 1)
         val p = JSONObject()
         for ((k, v) in sp.all) {
+            // A senha própria (hash e sal) nunca vai para o backup.
+            if (k == "pin_hash" || k == "pin_salt") continue
             val e = JSONObject()
             when (v) {
                 is Int -> { e.put("t", "i"); e.put("v", v) }
@@ -128,10 +173,14 @@ class Prefs(private val ctx: Context) {
     fun importJson(text: String) {
         val root = JSONObject(text)
         val p = root.getJSONObject("prefs")
+        // Mantém a senha própria atual (o backup não a carrega).
+        val keepHash = sp.getString("pin_hash", null)
+        val keepSalt = sp.getString("pin_salt", null)
         val ed = sp.edit().clear()
         val keys = p.keys()
         while (keys.hasNext()) {
             val k = keys.next()
+            if (k == "pin_hash" || k == "pin_salt") continue
             val e = p.getJSONObject(k)
             when (e.getString("t")) {
                 "i" -> ed.putInt(k, e.getInt("v"))
@@ -148,6 +197,9 @@ class Prefs(private val ctx: Context) {
         }
         val wp = root.optString("wallpaper", "")
         val bytes = if (wp.isNotEmpty()) Base64.decode(wp, Base64.DEFAULT) else null
+        if (keepHash != null && keepSalt != null) {
+            ed.putString("pin_hash", keepHash).putString("pin_salt", keepSalt)
+        }
         ed.apply()
         if (bytes != null) wallpaperFile().writeBytes(bytes) else clearWallpaper()
     }

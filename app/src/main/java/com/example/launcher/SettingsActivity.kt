@@ -17,9 +17,11 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -33,9 +35,8 @@ class SettingsActivity : Activity() {
     private val reqPick = 42
     private val reqExport = 43
     private val reqImport = 44
-    private val reqAuth = 46
-
     private lateinit var prefs: Prefs
+    private lateinit var lock: LockHelper
     private lateinit var content: LinearLayout
     private var authed = false
     private var adminShown = false
@@ -47,24 +48,23 @@ class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        lock = LockHelper(this, prefs)
         authed = savedInstanceState?.getBoolean("authed") ?: false
 
-        // Com apps bloqueados, só abre Personalizar depois de confirmar a senha/digital do celular.
+        // Com apps bloqueados, só abre Personalizar depois de confirmar a senha.
         if (prefs.locked.isNotEmpty() && !authed) {
-            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            val i = km.createConfirmDeviceCredentialIntent(
-                "Personalizar", "Há apps bloqueados. Confirme que é você."
-            )
-            if (i != null) {
-                try {
-                    startActivityForResult(i, reqAuth)
-                    return
-                } catch (e: Exception) {
-                    // sem como autenticar: segue para a tela
-                }
+            lock.authenticate("Personalizar", onCancel = { finish() }) {
+                authed = true
+                build()
             }
+            return
         }
         build()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        lock.dismiss()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -212,6 +212,44 @@ class SettingsActivity : Activity() {
                 "Dica: segure um app para fixar no dock, mover para pasta, bloquear com senha/digital, " +
                     "ocultar, ver informações ou desinstalar. O bloqueio vale para abrir o app por este " +
                     "launcher (não impede abrir por outro launcher ou pelas notificações).",
+                13f
+            )
+        )
+
+        // Bloqueio de apps
+        content.addView(label("Bloqueio de apps", 18f, true))
+        val ownActive = prefs.lockMode == 1 && prefs.hasPin()
+        choiceButton(
+            "Senha usada",
+            arrayOf("Senha/digital do celular", "Senha própria deste launcher"),
+            if (ownActive) 1 else 0
+        ) { which ->
+            if (which == 1 && !prefs.hasPin()) {
+                askNewPin(onDone = {
+                    prefs.lockMode = 1
+                    recreate()
+                }, onCancel = { recreate() })
+            } else {
+                prefs.lockMode = which
+                recreate()
+            }
+        }
+        if (prefs.hasPin()) {
+            button("Alterar senha própria") {
+                askNewPin(onDone = { toast("Senha alterada") }, onCancel = {})
+            }
+            button("Remover senha própria") {
+                prefs.clearPin()
+                prefs.lockMode = 0
+                recreate()
+            }
+        }
+        content.addView(
+            label(
+                "A senha própria é diferente da do celular e fica salva só neste app (apenas o " +
+                    "código de verificação, nunca a senha em si). Ela não entra no backup. Se esquecer, " +
+                    "só limpando os dados do app em Ajustes do Android (isso apaga as configurações). " +
+                    "Após 5 erros, espera 30 segundos.",
                 13f
             )
         )
@@ -390,15 +428,7 @@ class SettingsActivity : Activity() {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode == reqAuth) {
-            if (resultCode == RESULT_OK) {
-                authed = true
-                build()
-            } else {
-                finish()
-            }
-            return
-        }
+        if (lock.handleResult(requestCode, resultCode)) return
         if (resultCode != RESULT_OK) return
         val uri = data?.data ?: return
 
@@ -451,6 +481,53 @@ class SettingsActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- Outros
+
+    private fun askNewPin(onDone: () -> Unit, onCancel: () -> Unit) {
+        val type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val a = EditText(this).apply {
+            hint = "Nova senha (mín. 4 caracteres)"
+            inputType = type
+            setSingleLine()
+        }
+        val b = EditText(this).apply {
+            hint = "Repita a senha"
+            inputType = type
+            setSingleLine()
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(a)
+            addView(b)
+        }
+        var saved = false
+        val d = AlertDialog.Builder(this)
+            .setTitle("Senha própria")
+            .setView(box)
+            .setPositiveButton("Salvar", null)
+            .setNegativeButton("Cancelar", null)
+            .setOnDismissListener {
+                if (!saved && !isDestroyed) onCancel()
+            }
+            .create()
+        d.setOnShowListener {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val p1 = a.text.toString()
+                val p2 = b.text.toString()
+                if (p1.length < 4) {
+                    a.error = "Mínimo de 4 caracteres"
+                } else if (p1 != p2) {
+                    b.error = "As senhas não são iguais"
+                } else {
+                    prefs.setPin(p1)
+                    saved = true
+                    d.dismiss()
+                    onDone()
+                }
+            }
+        }
+        d.show()
+    }
 
     private fun openHomeChooser() {
         try {

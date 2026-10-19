@@ -14,7 +14,7 @@ substitui o seu launcher atual. Voltar sai dele.
 - **Pastas**: segure um app > "Mover para pasta"; toque na pasta para abrir; segure a pasta para renomear/excluir
 - **Gestos** configuráveis (deslizar para baixo/cima, toque duplo): buscar, bloquear a tela, abrir Personalizar, abrir notificações
 - **Linha rápida** no topo com os apps recentes ou mais usados (e ordenação por mais usados)
-- **Bloqueio por app**: segure um app > "Bloquear com senha/digital" (usa a senha, PIN, padrão ou digital do próprio celular). Vale para abrir pelo launcher; Personalizar também pede a senha quando há apps bloqueados
+- **Bloqueio por app**: segure um app > "Bloquear com senha/digital" (usa a senha, PIN, padrão ou digital do próprio celular, ou uma **senha própria do launcher**, separada da do celular — escolha em Personalizar > Bloqueio de apps; a senha própria não entra no backup). Vale para abrir pelo launcher; Personalizar também pede a senha quando há apps bloqueados
 - **Backup**: exporta/importa todas as configurações (e a imagem de fundo) em um arquivo JSON
 - Segure um app: fixar/desafixar, pasta, bloqueio, ocultar, informações, desinstalar
 - Atualiza sozinho ao instalar/remover apps

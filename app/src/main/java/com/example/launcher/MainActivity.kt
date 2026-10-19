@@ -68,8 +68,6 @@ class FolderItem(val name: String, val members: List<AppEntry>) : Item()
  */
 class MainActivity : Activity() {
 
-    private val reqAuth = 77
-
     private lateinit var prefs: Prefs
     private lateinit var root: LinearLayout
     private lateinit var search: EditText
@@ -98,7 +96,7 @@ class MainActivity : Activity() {
     private var query = ""
     private var lockedSet: Set<String> = emptySet()
     private var folderDialog: AlertDialog? = null
-    private var pendingAction: (() -> Unit)? = null
+    private lateinit var lock: LockHelper
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
@@ -126,6 +124,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        lock = LockHelper(this, prefs)
         buildUi()
         showDrawer(prefs.startInDrawer, false)
 
@@ -151,6 +150,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        lock.dismiss()
         folderDialog?.dismiss()
         try {
             unregisterReceiver(pkgReceiver)
@@ -191,11 +191,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == reqAuth) {
-            val action = pendingAction
-            pendingAction = null
-            if (resultCode == RESULT_OK) action?.invoke()
-        }
+        lock.handleResult(requestCode, resultCode)
     }
 
     // ---------------------------------------------------------------- UI
@@ -684,24 +680,9 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Bloqueio / abrir apps
 
-    /**
-     * Pede a senha/PIN/padrão/digital do celular e então executa [action].
-     * Se o aparelho não tem bloqueio de tela, não há como proteger: executa direto.
-     */
+    /** Pede a senha (própria ou do celular, conforme Personalizar) e então executa [action]. */
     private fun authThen(title: String, action: () -> Unit) {
-        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        val i = km.createConfirmDeviceCredentialIntent(title, "Confirme que é você")
-        if (i == null) {
-            action()
-            return
-        }
-        pendingAction = action
-        try {
-            startActivityForResult(i, reqAuth)
-        } catch (e: Exception) {
-            pendingAction = null
-            toast("Não foi possível pedir a autenticação")
-        }
+        lock.authenticate(title, null, action)
     }
 
     private fun launch(a: AppEntry) {
@@ -729,11 +710,10 @@ class MainActivity : Activity() {
     }
 
     private fun toggleLock(a: AppEntry) {
-        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (!km.isDeviceSecure) {
+        if (!lock.canProtect()) {
             Toast.makeText(
                 this,
-                "Defina uma senha, PIN, padrão ou digital nas configurações do Android para usar o bloqueio por app",
+                "Defina uma senha própria em Personalizar > Bloqueio de apps, ou um bloqueio de tela no Android",
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -747,7 +727,7 @@ class MainActivity : Activity() {
         } else {
             prefs.locked = prefs.locked + a.pkg
             refreshList()
-            toast("${a.label} agora pede sua senha/digital ao abrir por aqui")
+            toast("${a.label} agora pede senha para abrir por aqui")
         }
     }
 
@@ -783,7 +763,7 @@ class MainActivity : Activity() {
         labels.add(if (currentFolder != null) "Mover para outra pasta…" else "Mover para pasta…")
         actions.add { chooseFolder(a) }
 
-        labels.add(if (isLocked) "Remover bloqueio" else "Bloquear com senha/digital")
+        labels.add(if (isLocked) "Remover bloqueio" else "Bloquear com senha")
         actions.add { toggleLock(a) }
 
         labels.add("Ocultar da lista")
