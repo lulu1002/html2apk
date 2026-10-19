@@ -12,6 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-
-rootProject.name = "WgTunnel"
+rootProject.name = "MeuLauncher"
 include(":app")

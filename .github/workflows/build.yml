@@ -15,26 +15,16 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-
-      - name: Aceitar licenças do Android SDK (o SDK já vem no runner)
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.9
+          gradle-version: '8.7'
 
-      - name: Compilar APKs (debug e release)
-        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
 
-      - name: Enviar APK debug
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: wg-tunnel-debug
+          name: MeuLauncher-debug
           path: app/build/outputs/apk/debug/*.apk
-
-      - name: Enviar APK release
-        uses: actions/upload-artifact@v4
-        with:
-          name: wg-tunnel-release
-          path: app/build/outputs/apk/release/*.apk

@@ -1,32 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">WG Tunnel</string>
-    <string name="empty">Nenhum túnel ainda.\nToque em + para importar um arquivo .conf ou criar um túnel.</string>
-    <string name="add_tunnel">Adicionar túnel</string>
-    <string name="import_file">Importar de arquivo (.conf)</string>
-    <string name="create_new">Criar do zero</string>
-    <string name="new_tunnel">Novo túnel</string>
-    <string name="edit">Editar</string>
-    <string name="delete">Excluir</string>
-    <string name="export_conf">Exportar .conf</string>
-    <string name="save">Salvar</string>
-    <string name="gen_key">Gerar chave</string>
-    <string name="tunnel_name">Nome do túnel (até 15 caracteres)</string>
-    <string name="config">Configuração</string>
-    <string name="connected">Conectado</string>
-    <string name="disconnected">Desconectado</string>
-    <string name="connected_stats">Conectado · ↓ %1$s  ↑ %2$s</string>
-    <string name="vpn_denied">Permissão de VPN negada</string>
-    <string name="turn_off_first">Desligue o túnel antes de alterar</string>
-    <string name="confirm_delete">Excluir o túnel \"%1$s\"?</string>
-    <string name="imported">Túnel \"%1$s\" importado</string>
-    <string name="exported">Arquivo exportado</string>
-    <string name="invalid_name">Use 1–15 caracteres: letras, números e _ = + . -</string>
-    <string name="name_exists">Já existe um túnel com esse nome</string>
-    <string name="public_key_fmt">Chave pública (toque para copiar):\n%1$s</string>
-    <string name="public_key_none">Chave pública: defina uma PrivateKey válida</string>
-    <string name="copied">Copiado</string>
-    <string name="widget_desc">Liga/desliga o último túnel usado</string>
-    <string name="open_app_first">Abra o app e conecte um túnel uma vez para conceder a permissão de VPN</string>
-    <string name="no_tunnel">Crie um túnel primeiro</string>
+    <string name="app_name">Meu Launcher</string>
+    <string name="settings">Personalizar</string>
 </resources>

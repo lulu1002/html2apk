@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wgtunnel"
-    compileSdk = 35
+    namespace = "com.example.launcher"
+    compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.wgtunnel"
+        applicationId = "com.example.launcher"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -18,9 +18,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Assinado com a chave de debug para que o APK de release seja instalável direto.
-            // Para publicar de verdade, troque por uma keystore sua.
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -34,8 +31,5 @@ android {
 }
 
 dependencies {
-    // Backend oficial do WireGuard (wireguard-go embutido) para Android
-    implementation("com.wireguard.android:tunnel:1.0.20230706")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 }
