@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.exemplo.tv"
+    namespace = "com.exemplo.devtools"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.exemplo.tv"
+        applicationId = "com.exemplo.devtools"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -38,8 +38,5 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
     implementation("androidx.core:core-ktx:1.13.1")
 }

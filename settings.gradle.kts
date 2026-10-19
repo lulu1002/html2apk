@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "TVAberta"
+rootProject.name = "DevToolbox"
 include(":app")
