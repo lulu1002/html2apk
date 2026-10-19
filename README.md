@@ -1,7 +1,7 @@
 # Rádio (streaming)
 
 App Android (Kotlin + Media3/ExoPlayer) com lista de estações, favoritas, anterior/próxima,
-timer para desligar, notificação com controles e reprodução em segundo plano.
+timer para desligar, **busca de rádios do Brasil** (Radio Browser), notificação com controles e reprodução em segundo plano.
 
 ## Compilar pelo GitHub Actions
 1. Crie um repositório e envie estes arquivos (push na branch `main`).

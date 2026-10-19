@@ -15,6 +15,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -144,15 +145,21 @@ class MainActivity : Activity() {
             setPadding(0, dp(8), 0, dp(8))
         }
         sleepBtn = Button(this).apply {
-            text = "Timer: desligado"
+            text = "Timer"
             setOnClickListener { showSleepDialog() }
         }
         val addBtn = Button(this).apply {
-            text = "+ Estação"
+            text = "+ Link"
             setOnClickListener { showAddDialog() }
         }
-        actions.addView(sleepBtn)
-        actions.addView(addBtn)
+        val searchBtn = Button(this).apply {
+            text = "Buscar"
+            setOnClickListener { showSearchDialog() }
+        }
+        val w = { LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+        actions.addView(sleepBtn, w())
+        actions.addView(searchBtn, w())
+        actions.addView(addBtn, w())
         root.addView(actions)
 
         adapter = StationAdapter()
@@ -252,12 +259,12 @@ class MainActivity : Activity() {
                 sleepRunnable?.let { handler.removeCallbacks(it) }
                 sleepRunnable = null
                 if (minutes[which] == 0) {
-                    sleepBtn.text = "Timer: desligado"
+                    sleepBtn.text = "Timer"
                 } else {
-                    sleepBtn.text = "Timer: ${minutes[which]} min"
+                    sleepBtn.text = "Timer ${minutes[which]}m"
                     val r = Runnable {
                         controller?.pause()
-                        sleepBtn.text = "Timer: desligado"
+                        sleepBtn.text = "Timer"
                     }
                     sleepRunnable = r
                     handler.postDelayed(r, minutes[which] * 60_000L)
@@ -296,6 +303,94 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    private fun showSearchDialog() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+        }
+        val input = EditText(this).apply {
+            hint = "Nome da rádio (vazio = mais populares)"
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setSingleLine()
+        }
+        val searchBtn = Button(this).apply { text = "Buscar" }
+        val status = TextView(this).apply {
+            text = "Rádios do Brasil via radio-browser.info"
+            textSize = 13f
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val results = mutableListOf<RadioBrowser.Result>()
+
+        val listAdapter = object : BaseAdapter() {
+            override fun getCount() = results.size
+            override fun getItem(position: Int) = results[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val r = results[position]
+                val row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(4), dp(10), dp(4), dp(10))
+                }
+                row.addView(TextView(this@MainActivity).apply {
+                    text = r.name
+                    textSize = 16f
+                })
+                row.addView(TextView(this@MainActivity).apply {
+                    text = r.detail
+                    textSize = 12f
+                    alpha = 0.7f
+                })
+                return row
+            }
+        }
+        val list = ListView(this).apply { adapter = listAdapter }
+
+        fun doSearch() {
+            status.text = "Buscando…"
+            val q = input.text.toString()
+            Thread {
+                try {
+                    val found = RadioBrowser.search(q)
+                    runOnUiThread {
+                        results.clear()
+                        results.addAll(found)
+                        listAdapter.notifyDataSetChanged()
+                        status.text = if (found.isEmpty()) "Nada encontrado"
+                        else "${found.size} estações — toque para adicionar e ouvir"
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread { status.text = "Falha na busca. Verifique a internet e tente de novo." }
+                }
+            }.start()
+        }
+
+        searchBtn.setOnClickListener { doSearch() }
+        input.setOnEditorActionListener { _, _, _ -> doSearch(); true }
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val r = results[pos]
+            val station = stations.firstOrNull { it.url == r.url }
+                ?: Station(r.name, r.url).also {
+                    stations.add(it)
+                    persist()
+                }
+            play(station)
+            Toast.makeText(this, "Adicionada: ${station.name}", Toast.LENGTH_SHORT).show()
+        }
+
+        box.addView(input)
+        box.addView(searchBtn)
+        box.addView(status)
+        box.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(320)))
+
+        AlertDialog.Builder(this)
+            .setTitle("Buscar rádios do Brasil")
+            .setView(box)
+            .setNegativeButton("Fechar", null)
+            .show()
+        doSearch() // já mostra as mais populares
     }
 
     private fun confirmDelete(pos: Int) {
