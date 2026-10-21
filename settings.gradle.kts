@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "MeuLauncher"
+rootProject.name = "PCLauncher"
 include(":app")

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.launcher"
+    namespace = "com.tameczada.pclauncher"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.launcher"
+        applicationId = "com.tameczada.pclauncher"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -16,20 +16,11 @@ android {
     }
 
     buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
+        release { isMinifyEnabled = false }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    kotlinOptions { jvmTarget = "17" }
 }

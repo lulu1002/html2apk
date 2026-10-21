@@ -2,8 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -21,10 +20,10 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+      - name: Compilar APK debug
+        run: gradle assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MeuLauncher-debug
+          name: PCLauncher-debug
           path: app/build/outputs/apk/debug/*.apk
