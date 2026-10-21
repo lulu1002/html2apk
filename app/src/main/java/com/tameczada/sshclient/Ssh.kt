@@ -91,8 +91,12 @@ class Ssh(val c: Conn) {
         }
     }
 
-    private fun feed(t: String) {
-        val sb = StringBuilder(term)
+    private fun feed(t0: String) {
+        var t = t0
+        var base = term
+        val k = maxOf(t.lastIndexOf("\u001B[2J"), t.lastIndexOf("\u001B[3J"))
+        if (k >= 0) { t = t.substring(k + 4); base = "" }
+        val sb = StringBuilder(base)
         for (ch in ansi.replace(t, "").replace("\r\n", "\n")) when (ch) {
             '\b' -> if (sb.isNotEmpty() && sb.last() != '\n') sb.setLength(sb.length - 1)
             '\r', '\u0007' -> {}
