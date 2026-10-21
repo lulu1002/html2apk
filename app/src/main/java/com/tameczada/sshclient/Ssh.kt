@@ -8,8 +8,11 @@ import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.SftpProgressMonitor
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.UUID
 import java.util.Vector
@@ -23,6 +26,11 @@ data class Conn(
 )
 
 data class Entry(val name: String, val dir: Boolean, val size: Long, val link: Boolean)
+
+data class Sc(
+    val id: String = UUID.randomUUID().toString(),
+    val label: String, val cmd: String, val enter: Boolean = true
+)
 
 object Store {
     fun load(c: Context): List<Conn> = try {
@@ -123,7 +131,86 @@ class Ssh(val c: Conn) {
         } else f!!.rm(p)
     }
 
+    fun download(p: String, dest: File, prog: (Long, Long) -> Unit) {
+        synchronized(this) {
+            val total = f!!.stat(p).size
+            FileOutputStream(dest).use { o ->
+                f!!.get(p, o, object : SftpProgressMonitor {
+                    var d = 0L
+                    var last = -1L
+                    override fun init(op: Int, src: String?, dst: String?, max: Long) {}
+                    override fun count(c: Long): Boolean {
+                        d += c
+                        val pc = if (total > 0) d * 100 / total else 0
+                        if (pc != last) { last = pc; prog(d, total) }
+                        return true
+                    }
+                    override fun end() {}
+                })
+            }
+        }
+    }
+
     fun close() {
         thread { runCatching { sh?.disconnect(); f?.disconnect(); s?.disconnect() }; ex.shutdown() }
+    }
+}
+
+fun expand(s: String): String {
+    val r = s.replace("<ESC>", "\u001B").replace("<TAB>", "\t").replace("<ENTER>", "\n")
+        .replace("<UP>", "\u001B[A").replace("<DOWN>", "\u001B[B")
+        .replace("<RIGHT>", "\u001B[C").replace("<LEFT>", "\u001B[D")
+    return Regex("<C-([a-zA-Z])>").replace(r) { m ->
+        (m.groupValues[1][0].uppercaseChar().code - 64).toChar().toString()
+    }
+}
+
+fun defaultScs() = listOf(
+    Sc(label = "ls -la", cmd = "ls -la"),
+    Sc(label = "cd ..", cmd = "cd .."),
+    Sc(label = "pwd", cmd = "pwd"),
+    Sc(label = "clear", cmd = "clear"),
+    Sc(label = "Ctrl+L", cmd = "<C-l>", enter = false),
+    Sc(label = "Ctrl+A", cmd = "<C-a>", enter = false),
+    Sc(label = "Ctrl+E", cmd = "<C-e>", enter = false),
+    Sc(label = "Ctrl+R", cmd = "<C-r>", enter = false),
+    Sc(label = "q", cmd = "q", enter = false),
+    Sc(label = "vim :q!", cmd = "<ESC>:q!<ENTER>", enter = false),
+    Sc(label = "htop", cmd = "htop"),
+    Sc(label = "top", cmd = "top"),
+    Sc(label = "df -h", cmd = "df -h"),
+    Sc(label = "free -h", cmd = "free -h"),
+    Sc(label = "du -sh *", cmd = "du -sh *"),
+    Sc(label = "ps aux", cmd = "ps aux"),
+    Sc(label = "ip a", cmd = "ip a"),
+    Sc(label = "ping", cmd = "ping -c 4 8.8.8.8"),
+    Sc(label = "uname", cmd = "uname -a"),
+    Sc(label = "history", cmd = "history | tail -30"),
+    Sc(label = "git status", cmd = "git status"),
+    Sc(label = "git pull", cmd = "git pull"),
+    Sc(label = "docker ps", cmd = "docker ps"),
+    Sc(label = "sudo", cmd = "sudo ", enter = false),
+    Sc(label = "nano", cmd = "nano ", enter = false),
+    Sc(label = "tail -f", cmd = "tail -f ", enter = false),
+    Sc(label = "systemctl", cmd = "systemctl status ", enter = false),
+    Sc(label = "~/", cmd = "cd ~", enter = true)
+)
+
+object ScStore {
+    fun load(c: Context): List<Sc> {
+        val raw = c.getSharedPreferences("s", 0).getString("sc", null) ?: return defaultScs()
+        return try {
+            val a = JSONArray(raw)
+            (0 until a.length()).map {
+                val o = a.getJSONObject(it)
+                Sc(o.getString("id"), o.getString("label"), o.getString("cmd"), o.getBoolean("enter"))
+            }
+        } catch (e: Exception) { defaultScs() }
+    }
+
+    fun save(c: Context, l: List<Sc>) {
+        val a = JSONArray()
+        l.forEach { a.put(JSONObject().put("id", it.id).put("label", it.label).put("cmd", it.cmd).put("enter", it.enter)) }
+        c.getSharedPreferences("s", 0).edit().putString("sc", a.toString()).apply()
     }
 }
