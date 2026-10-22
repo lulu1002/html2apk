@@ -1,7 +1,6 @@
 name: Build APK
 on:
   push:
-    branches: [main, master]
   workflow_dispatch:
 jobs:
   build:
@@ -12,13 +11,12 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Aceitar licencas do SDK
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-      - uses: gradle/actions/setup-gradle@v3
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - run: gradle assembleDebug --no-daemon
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: SshClient-apk
+          name: MiniCut-debug
           path: app/build/outputs/apk/debug/*.apk

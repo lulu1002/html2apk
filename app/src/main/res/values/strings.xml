@@ -1,0 +1,4 @@
+<resources>
+    <!-- Mude aqui o nome que aparece embaixo do ícone -->
+    <string name="app_name">MiniCut Studio</string>
+</resources>
