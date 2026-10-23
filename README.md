@@ -1,32 +1,8 @@
-# Bloco de Notas Android
+# Notas
 
-Aplicativo Android offline para criar, editar e apagar notas organizadas em categorias.
+Bloco de notas Android (Kotlin + Jetpack Compose). Notas e categorias ficam salvas no próprio app.
 
-## Recursos
-- Criar, editar e apagar notas.
-- Criar, renomear e apagar categorias.
-- Filtrar notas por categoria.
-- Salvamento local no próprio aplicativo usando armazenamento privado (`SharedPreferences`).
-- Interface em português.
-- Workflow do GitHub Actions para compilar e publicar o APK como artefato.
-
-## Compilar localmente
-Requisitos: JDK 17, Android SDK e conexão com a internet na primeira compilação.
-
-```bash
-./gradlew assembleDebug
-```
-
-APK gerado em:
-`app/build/outputs/apk/debug/app-debug.apk`
-
-## Compilar no GitHub Actions
-1. Crie um repositório no GitHub e envie todos os arquivos deste projeto.
-2. Garanta que a branch principal se chame `main` ou `master`.
-3. Acesse a aba **Actions** e execute **Build APK** (ou faça push).
-4. Ao concluir, abra a execução do workflow e baixe o artefato **bloco-de-notas-apk**.
-
-## Observações
-- As notas ficam no armazenamento privado do app e não são enviadas para a internet.
-- Desinstalar o app ou limpar os dados do aplicativo apaga as notas locais.
-- Apagar uma categoria também apaga as notas associadas a ela.
+## Compilar
+1. Suba este projeto para um repositório no GitHub (branch `main`).
+2. Aba **Actions** → workflow **Build APK** (roda sozinho a cada push, ou clique em *Run workflow*).
+3. Ao terminar, baixe o artefato **notas-apk** → `app-debug.apk`.
