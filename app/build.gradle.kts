@@ -8,15 +8,28 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.galeria.privada"
+        applicationId = "com.galeria.cofre"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("fixa") {
+            storeFile = file("keystore.jks")
+            storePassword = "galeria123"
+            keyAlias = "galeria"
+            keyPassword = "galeria123"
+        }
+    }
+
     buildTypes {
-        release { isMinifyEnabled = false }
+        debug { signingConfig = signingConfigs.getByName("fixa") }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("fixa")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

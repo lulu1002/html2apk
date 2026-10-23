@@ -10,7 +10,7 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="Galeria Privada"
+        android:label="Gallery Privada "
         android:supportsRtl="true"
         android:theme="@style/Theme.Gallery">
 
@@ -30,7 +30,7 @@
 
         <provider
             android:name=".VaultProvider"
-            android:authorities="com.galeria.privada.vault"
+            android:authorities="${applicationId}.vault"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">

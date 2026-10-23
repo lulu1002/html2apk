@@ -39,6 +39,9 @@ class VaultProvider : DocumentsProvider() {
     private fun cols(p: Array<out String>?, d: Array<String>): Array<String> =
         if (p != null) arrayOf(*p) else d
 
+    private fun appName(): String =
+        context!!.applicationInfo.loadLabel(context!!.packageManager).toString()
+
     private fun authority() = context!!.packageName + ".vault"
 
     override fun onCreate(): Boolean = true
@@ -89,7 +92,7 @@ class VaultProvider : DocumentsProvider() {
             .add(Root.COLUMN_ROOT_ID, ROOT_ID)
             .add(Root.COLUMN_FLAGS, Root.FLAG_LOCAL_ONLY)
             .add(Root.COLUMN_ICON, R.drawable.ic_vault)
-            .add(Root.COLUMN_TITLE, "Galeria Privada")
+            .add(Root.COLUMN_TITLE, appName())
             .add(Root.COLUMN_SUMMARY, "Protegida por senha")
             .add(Root.COLUMN_DOCUMENT_ID, ROOT_DOC)
             .add(Root.COLUMN_MIME_TYPES, "*/*")
