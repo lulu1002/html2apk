@@ -1,6 +1,11 @@
 package com.galeria.privada
 
+import android.Manifest
+import android.content.DialogInterface
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
@@ -14,23 +19,39 @@ import android.widget.Toast
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.tabs.TabLayout
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var adapter: MediaAdapter
     private lateinit var root: View
     private lateinit var empty: View
+    private lateinit var tabs: TabLayout
     private lateinit var tvTitle: TextView
     private lateinit var tvCount: TextView
     private lateinit var btnDelete: ImageButton
+    private lateinit var btnExport: ImageButton
+
+    private var tabVideo = false
+    private var totalCount = 0
+    private var pendingExport: (() -> Unit)? = null
 
     private val picker = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris -> if (uris.isNotEmpty()) importAll(uris) }
+
+    private val permLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) pendingExport?.invoke()
+        else Toast.makeText(this, "Sem permissão para salvar no celular", Toast.LENGTH_SHORT).show()
+        pendingExport = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,9 +60,11 @@ class MainActivity : AppCompatActivity() {
 
         root = findViewById(R.id.root)
         empty = findViewById(R.id.empty)
+        tabs = findViewById(R.id.tabs)
         tvTitle = findViewById(R.id.tvTitle)
         tvCount = findViewById(R.id.tvCount)
         btnDelete = findViewById(R.id.btnDelete)
+        btnExport = findViewById(R.id.btnExport)
         val recycler = findViewById<RecyclerView>(R.id.recycler)
         val fab = findViewById<ExtendedFloatingActionButton>(R.id.fabAdd)
 
@@ -52,8 +75,21 @@ class MainActivity : AppCompatActivity() {
         recycler.layoutManager = GridLayoutManager(this, 3)
         recycler.adapter = adapter
 
+        tabs.addTab(tabs.newTab().setText("Fotos"))
+        tabs.addTab(tabs.newTab().setText("Vídeos"))
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                tabVideo = tab?.position == 1
+                adapter.clearSelection()
+                reload()
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+
         fab.setOnClickListener { picker.launch(arrayOf("image/*", "video/*")) }
         btnDelete.setOnClickListener { confirmDelete() }
+        btnExport.setOnClickListener { askExport() }
         findViewById<ImageButton>(R.id.btnMenu).setOnClickListener { showMenu(it) }
 
         onBackPressedDispatcher.addCallback(this) {
@@ -85,9 +121,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun reload() {
-        val list = Vault.list(this)
-        adapter.submit(list)
-        empty.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        val all = Vault.list(this)
+        val videos = all.filter { Vault.isVideo(it) }
+        val photos = all.filter { !Vault.isVideo(it) }
+        totalCount = all.size
+        tabs.getTabAt(0)?.text = "Fotos (${photos.size})"
+        tabs.getTabAt(1)?.text = "Vídeos (${videos.size})"
+        val current = if (tabVideo) videos else photos
+        adapter.submit(current)
+        empty.visibility = if (current.isEmpty()) View.VISIBLE else View.GONE
         updateHeader()
     }
 
@@ -96,12 +138,12 @@ class MainActivity : AppCompatActivity() {
             tvTitle.text = "${adapter.selectedCount} selecionado(s)"
             tvCount.text = "Toque para selecionar mais"
             btnDelete.visibility = View.VISIBLE
+            btnExport.visibility = View.VISIBLE
         } else {
             tvTitle.text = "Galeria Privada"
-            val photos = adapter.items.count { Vault.isImage(it) }
-            val videos = adapter.items.count { Vault.isVideo(it) }
-            tvCount.text = "$photos fotos · $videos vídeos"
+            tvCount.text = "$totalCount itens protegidos"
             btnDelete.visibility = View.GONE
+            btnExport.visibility = View.GONE
         }
     }
 
@@ -111,10 +153,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun open(i: Int) {
-        startActivity(Intent(this, ViewerActivity::class.java).putExtra("index", i))
+        startActivity(
+            Intent(this, ViewerActivity::class.java)
+                .putExtra("index", i)
+                .putExtra("video", tabVideo)
+        )
     }
 
-    private fun importAll(uris: List<android.net.Uri>) {
+    private fun importAll(uris: List<Uri>) {
         Toast.makeText(this, "Importando…", Toast.LENGTH_SHORT).show()
         val app = applicationContext
         Thread {
@@ -128,6 +174,52 @@ class MainActivity : AppCompatActivity() {
                     "$ok item(ns) protegido(s). Os originais continuam na galeria normal — apague-os se quiser.",
                     Toast.LENGTH_LONG
                 ).show()
+            }
+        }.start()
+    }
+
+    private fun askExport() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Devolver ao celular")
+            .setMessage(
+                "${adapter.selectedCount} item(ns) vão para Imagens/Vídeos > GaleriaPrivada.\n\n" +
+                    "Baixar: mantém uma cópia na galeria privada.\n" +
+                    "Mover: tira da galeria privada."
+            )
+            .setPositiveButton("Mover") { _, _ -> export(true) }
+            .setNeutralButton("Baixar") { _, _ -> export(false) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun export(move: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingExport = { export(move) }
+            permLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
+        val files = adapter.selectedFiles()
+        val app = applicationContext
+        Toast.makeText(this, "Exportando…", Toast.LENGTH_SHORT).show()
+        Thread {
+            var ok = 0
+            files.forEach {
+                if (Vault.exportToPhone(app, it)) {
+                    ok++
+                    if (move) it.delete()
+                }
+            }
+            Vault.notifyChanged(app)
+            runOnUiThread {
+                adapter.clearSelection()
+                reload()
+                val verbo = if (move) "movido(s)" else "baixado(s)"
+                val falhas = files.size - ok
+                val extra = if (falhas > 0) " ($falhas falharam)" else ""
+                Toast.makeText(this, "$ok item(ns) $verbo para o celular$extra", Toast.LENGTH_LONG).show()
             }
         }.start()
     }
@@ -149,14 +241,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, "Alterar senha")
-            menu.add(0, 2, 1, "Bloquear agora")
+            menu.add(0, 3, 0, "Selecionar tudo")
+            menu.add(0, 1, 1, "Alterar senha")
+            menu.add(0, 2, 2, "Bloquear agora")
             setOnMenuItemClickListener {
                 when (it.itemId) {
                     1 -> changePassword()
                     2 -> {
                         Session.lockAll()
                         finishAffinity()
+                    }
+                    3 -> {
+                        adapter.selectAll()
+                        updateHeader()
                     }
                 }
                 true
@@ -185,7 +282,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Salvar", null)
             .setNegativeButton("Cancelar", null)
             .show()
-        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
             when {
                 !Vault.check(this, cur.text.toString()) ->
                     Toast.makeText(this, "Senha atual incorreta", Toast.LENGTH_SHORT).show()

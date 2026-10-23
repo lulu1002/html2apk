@@ -24,7 +24,7 @@ class ViewerActivity : AppCompatActivity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         setContentView(R.layout.activity_viewer)
 
-        files = Vault.list(this)
+        files = Vault.listByType(this, intent.getBooleanExtra("video", false))
         if (files.isEmpty()) {
             finish()
             return

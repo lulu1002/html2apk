@@ -1,6 +1,11 @@
 package com.galeria.privada
 
+import android.content.ContentValues
 import android.content.Context
+import android.media.MediaScannerConnection
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.DocumentsContract
@@ -94,6 +99,63 @@ object Vault {
 
     fun isVideo(file: File) = mime(file).startsWith("video/")
     fun isImage(file: File) = mime(file).startsWith("image/")
+
+    fun listByType(ctx: Context, video: Boolean): List<File> =
+        list(ctx).filter { isVideo(it) == video }
+
+    /** Copia um arquivo do cofre para a memória do celular (Imagens/Vídeos/Download > GaleriaPrivada). */
+    fun exportToPhone(ctx: Context, file: File): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) exportQ(ctx, file) else exportLegacy(ctx, file)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun exportQ(ctx: Context, file: File): Boolean {
+        val cr = ctx.contentResolver
+        val vol = MediaStore.VOLUME_EXTERNAL_PRIMARY
+        val (collection, folder) = when {
+            isVideo(file) -> MediaStore.Video.Media.getContentUri(vol) to Environment.DIRECTORY_MOVIES
+            isImage(file) -> MediaStore.Images.Media.getContentUri(vol) to Environment.DIRECTORY_PICTURES
+            else -> MediaStore.Downloads.getContentUri(vol) to Environment.DIRECTORY_DOWNLOADS
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime(file))
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/GaleriaPrivada")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = cr.insert(collection, values) ?: return false
+        try {
+            val out = cr.openOutputStream(uri) ?: throw java.io.IOException("sem saída")
+            out.use { o -> file.inputStream().use { it.copyTo(o) } }
+        } catch (e: Exception) {
+            cr.delete(uri, null, null)
+            return false
+        }
+        cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        return true
+    }
+
+    @Suppress("DEPRECATION")
+    private fun exportLegacy(ctx: Context, file: File): Boolean {
+        val type = when {
+            isVideo(file) -> Environment.DIRECTORY_MOVIES
+            isImage(file) -> Environment.DIRECTORY_PICTURES
+            else -> Environment.DIRECTORY_DOWNLOADS
+        }
+        val dir = File(Environment.getExternalStoragePublicDirectory(type), "GaleriaPrivada")
+        dir.mkdirs()
+        var target = File(dir, file.name)
+        var n = 1
+        while (target.exists()) {
+            val ext = file.extension
+            target = File(dir, if (ext.isEmpty()) "${file.nameWithoutExtension}_$n" else "${file.nameWithoutExtension}_$n.$ext")
+            n++
+        }
+        file.copyTo(target)
+        MediaScannerConnection.scanFile(ctx, arrayOf(target.absolutePath), null, null)
+        return true
+    }
 
     fun notifyChanged(ctx: Context) {
         val uri = DocumentsContract.buildChildDocumentsUri(ctx.packageName + ".vault", "root")

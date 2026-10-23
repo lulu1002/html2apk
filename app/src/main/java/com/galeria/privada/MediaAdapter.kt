@@ -33,6 +33,11 @@ class MediaAdapter(
         notifyItemChanged(pos)
     }
 
+    fun selectAll() {
+        selected.addAll(items.map { it.name })
+        notifyDataSetChanged()
+    }
+
     fun clearSelection() {
         selected.clear()
         notifyDataSetChanged()

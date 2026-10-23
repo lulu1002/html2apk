@@ -30,6 +30,11 @@
             </LinearLayout>
 
             <ImageButton
+                android:id="@+id/btnExport"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_download" android:visibility="gone" />
+            <ImageButton
                 android:id="@+id/btnDelete"
                 android:layout_width="48dp" android:layout_height="48dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
@@ -40,6 +45,15 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:src="@drawable/ic_more" />
         </LinearLayout>
+
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/tabs"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:background="@android:color/transparent"
+            app:tabIndicatorColor="@color/accent"
+            app:tabRippleColor="@android:color/transparent"
+            app:tabSelectedTextColor="@color/text"
+            app:tabTextColor="@color/muted" />
 
         <FrameLayout
             android:layout_width="match_parent" android:layout_height="0dp"
