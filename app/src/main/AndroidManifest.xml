@@ -6,7 +6,7 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="Galeria Privada"
+        android:label="Galeria hidden"
         android:supportsRtl="true"
         android:theme="@style/Theme.Gallery">
 
