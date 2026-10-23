@@ -2,10 +2,12 @@ package com.passavod.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -17,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
+import android.webkit.HttpAuthHandler;
 import android.webkit.PermissionRequest;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
@@ -25,7 +28,10 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.text.InputType;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
@@ -46,6 +52,7 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingPermission;
     private String pendingGeoOrigin;
     private GeolocationPermissions.Callback pendingGeoCallback;
+    private String triedAuthKey;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,8 +114,27 @@ public class MainActivity extends Activity {
                 progress.setVisibility(View.VISIBLE);
             }
 
+            // Login HTTP básico (popup "exige um nome de usuário e uma senha")
+            @Override
+            public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                                                  String host, String realm) {
+                final String key = host + "|" + realm;
+                final SharedPreferences prefs = getSharedPreferences("auth", MODE_PRIVATE);
+                String saved = prefs.getString(key, null);
+                if (saved != null && !key.equals(triedAuthKey)) {
+                    String[] up = saved.split("\n", 2);
+                    if (up.length == 2) {
+                        triedAuthKey = key;
+                        handler.proceed(up[0], up[1]);
+                        return;
+                    }
+                }
+                showAuthDialog(handler, host, key, saved, prefs);
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
+                triedAuthKey = null;
                 progress.setVisibility(View.GONE);
                 CookieManager.getInstance().flush();
             }
@@ -201,6 +227,39 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
             }
         });
+    }
+
+    private void showAuthDialog(final HttpAuthHandler handler, String host, final String key,
+                                String saved, final SharedPreferences prefs) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+
+        final EditText user = new EditText(this);
+        user.setHint("Nome de usuário");
+        user.setInputType(InputType.TYPE_CLASS_TEXT);
+        final EditText pass = new EditText(this);
+        pass.setHint("Senha");
+        pass.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        if (saved != null) user.setText(saved.split("\n", 2)[0]);
+        box.addView(user);
+        box.addView(pass);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Fazer login")
+                .setMessage(host + " exige um nome de usuário e uma senha.")
+                .setView(box)
+                .setCancelable(false)
+                .setPositiveButton("Fazer login", (d, w) -> {
+                    String u = user.getText().toString();
+                    String p = pass.getText().toString();
+                    prefs.edit().putString(key, u + "\n" + p).apply();
+                    triedAuthKey = key;
+                    handler.proceed(u, p);
+                })
+                .setNegativeButton("Cancelar", (d, w) -> handler.cancel())
+                .show();
     }
 
     private boolean handleUrl(Uri uri) {
