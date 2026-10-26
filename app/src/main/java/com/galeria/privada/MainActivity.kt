@@ -51,6 +51,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris -> if (uris.isNotEmpty()) importAll(uris) }
 
+    private val changeProtectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result -> if (result.resultCode == RESULT_OK) Toast.makeText(this, "Proteção atualizada", Toast.LENGTH_SHORT).show() }
+
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -405,11 +409,14 @@ class MainActivity : AppCompatActivity() {
     private fun showMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add(0, 3, 0, "Selecionar tudo")
-            menu.add(0, 1, 1, "Alterar senha")
-            menu.add(0, 2, 2, "Bloquear agora")
+            menu.add(0, 1, 1, "Alterar proteção")
+            menu.add(0, 4, 2, "Disfarce de calculadora")
+            menu.add(0, 2, 3, "Bloquear agora")
             setOnMenuItemClickListener {
                 when (it.itemId) {
-                    1 -> changePassword()
+                    1 -> changeProtectionLauncher.launch(
+                        Intent(this, UnlockActivity::class.java).putExtra(UnlockActivity.EXTRA_CHANGE_MODE, true)
+                    )
                     2 -> {
                         Session.lockAll()
                         finishAffinity()
@@ -418,6 +425,7 @@ class MainActivity : AppCompatActivity() {
                         adapter.selectAll()
                         updateHeader()
                     }
+                    4 -> disguiseSettings()
                 }
                 true
             }
@@ -425,38 +433,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun changePassword() {
-        fun field(hint: String) = EditText(this).apply {
-            this.hint = hint
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+    private fun disguiseSettings() {
+        val enabled = DisguiseManager.isEnabled(this)
+        val switchView = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+            text = "Mostrar ícone de Calculadora em vez de Galeria Privada"
+            isChecked = enabled
         }
-        val cur = field("Senha atual")
-        val new = field("Nova senha")
+        val codeField = EditText(this).apply {
+            hint = "Código secreto (números)"
+            setText(DisguiseManager.code(this@MainActivity))
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val info = TextView(this).apply {
+            text = "No app de Calculadora, digite esse código e toque em \"=\" para abrir a galeria."
+            setTextColor(getColor(R.color.muted))
+            textSize = 13f
+        }
         val pad = (24 * resources.displayMetrics.density).toInt()
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad / 2, pad, 0)
-            addView(cur)
-            addView(new)
+            addView(switchView)
+            addView(codeField, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = pad })
+            addView(info, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = pad / 2 })
         }
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("Alterar senha")
+            .setTitle("Disfarce de calculadora")
             .setView(box)
             .setPositiveButton("Salvar", null)
             .setNegativeButton("Cancelar", null)
             .show()
         dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
-            when {
-                !Vault.check(this, cur.text.toString()) ->
-                    Toast.makeText(this, "Senha atual incorreta", Toast.LENGTH_SHORT).show()
-                new.text.length < 4 ->
-                    Toast.makeText(this, "Use pelo menos 4 caracteres", Toast.LENGTH_SHORT).show()
-                else -> {
-                    Vault.setPassword(this, new.text.toString())
-                    Toast.makeText(this, "Senha alterada", Toast.LENGTH_SHORT).show()
-                    dialog.dismiss()
-                }
+            val code = codeField.text.toString().trim()
+            if (switchView.isChecked && code.length < 4) {
+                Toast.makeText(this, "Use um código com pelo menos 4 números", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (code.isNotEmpty()) DisguiseManager.setCode(this, code)
+            val wasEnabled = DisguiseManager.isEnabled(this)
+            DisguiseManager.setEnabled(this, switchView.isChecked)
+            dialog.dismiss()
+            if (switchView.isChecked && !wasEnabled) {
+                Toast.makeText(
+                    this,
+                    "Pronto. O ícone agora é \"Calculadora\". Para voltar, abra a Calculadora, digite o código e toque em =.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
+
 }

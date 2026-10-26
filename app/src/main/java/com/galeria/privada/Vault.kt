@@ -52,6 +52,16 @@ object Vault {
 
     fun hasPassword(ctx: Context) = prefs(ctx).contains("hash")
 
+    fun hasPattern(ctx: Context) = prefs(ctx).contains("pattern_hash")
+
+    fun isConfigured(ctx: Context) = hasPassword(ctx) || hasPattern(ctx)
+
+    fun authMethod(ctx: Context): String = prefs(ctx).getString("method", "password") ?: "password"
+
+    fun setAuthMethod(ctx: Context, method: String) {
+        prefs(ctx).edit().putString("method", method).apply()
+    }
+
     private fun derive(pw: String, salt: ByteArray): ByteArray {
         val spec = PBEKeySpec(pw.toCharArray(), salt, ITER, 256)
         return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
@@ -63,6 +73,22 @@ object Vault {
             .putString("salt", Base64.encodeToString(salt, Base64.NO_WRAP))
             .putString("hash", Base64.encodeToString(derive(pw, salt), Base64.NO_WRAP))
             .apply()
+    }
+
+    fun setPattern(ctx: Context, points: List<Int>) {
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val raw = points.joinToString(",")
+        prefs(ctx).edit()
+            .putString("pattern_salt", Base64.encodeToString(salt, Base64.NO_WRAP))
+            .putString("pattern_hash", Base64.encodeToString(derive(raw, salt), Base64.NO_WRAP))
+            .apply()
+    }
+
+    fun checkPattern(ctx: Context, points: List<Int>): Boolean {
+        val p = prefs(ctx)
+        val salt = Base64.decode(p.getString("pattern_salt", null) ?: return false, Base64.NO_WRAP)
+        val expected = Base64.decode(p.getString("pattern_hash", null) ?: return false, Base64.NO_WRAP)
+        return MessageDigest.isEqual(expected, derive(points.joinToString(","), salt))
     }
 
     fun check(ctx: Context, pw: String): Boolean {
