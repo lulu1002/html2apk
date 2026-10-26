@@ -6,6 +6,11 @@ import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.DocumentsContract
@@ -179,6 +184,59 @@ object Vault {
             n++
         }
         file.copyTo(target)
+        MediaScannerConnection.scanFile(ctx, arrayOf(target.absolutePath), null, null)
+        return true
+    }
+
+    /** Gera um .zip com todos os arquivos do cofre e salva em Download/GaleriaPrivada. Retorna o nome do arquivo, ou null se falhou. */
+    fun exportAllZip(ctx: Context): String? {
+        val files = list(ctx)
+        if (files.isEmpty()) return null
+        val name = "GaleriaPrivada_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date()) + ".zip"
+        val tmp = File(ctx.cacheDir, name)
+        return try {
+            ZipOutputStream(tmp.outputStream()).use { zos ->
+                files.forEach { f ->
+                    zos.putNextEntry(ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                }
+            }
+            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) saveZipQ(ctx, tmp, name) else saveZipLegacy(ctx, tmp, name)
+            if (ok) name else null
+        } catch (e: Exception) {
+            null
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    private fun saveZipQ(ctx: Context, src: File, name: String): Boolean {
+        val cr = ctx.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/GaleriaPrivada")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = cr.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) ?: return false
+        return try {
+            val out = cr.openOutputStream(uri) ?: throw java.io.IOException("sem saída")
+            out.use { o -> src.inputStream().use { it.copyTo(o) } }
+            cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            true
+        } catch (e: Exception) {
+            cr.delete(uri, null, null)
+            false
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun saveZipLegacy(ctx: Context, src: File, name: String): Boolean {
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "GaleriaPrivada")
+        dir.mkdirs()
+        val target = File(dir, name)
+        src.copyTo(target, overwrite = true)
         MediaScannerConnection.scanFile(ctx, arrayOf(target.absolutePath), null, null)
         return true
     }

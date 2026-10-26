@@ -339,6 +339,45 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun askExportZip() {
+        if (totalCount == 0) {
+            Toast.makeText(this, "Não há nada para exportar", Toast.LENGTH_SHORT).show()
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Exportar tudo em .zip")
+            .setMessage(
+                "$totalCount item(ns) vão para um único arquivo .zip em Download > GaleriaPrivada. " +
+                    "Os arquivos continuam protegidos aqui dentro."
+            )
+            .setPositiveButton("Exportar") { _, _ -> exportZip() }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun exportZip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingExport = { exportZip() }
+            permLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
+        val app = applicationContext
+        Toast.makeText(this, "Gerando .zip…", Toast.LENGTH_SHORT).show()
+        Thread {
+            val name = Vault.exportAllZip(app)
+            runOnUiThread {
+                if (name != null) {
+                    Toast.makeText(this, "Salvo em Download/GaleriaPrivada/$name", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Não foi possível gerar o .zip", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+
     private fun askExport() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Devolver ao celular")
@@ -409,9 +448,10 @@ class MainActivity : AppCompatActivity() {
     private fun showMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add(0, 3, 0, "Selecionar tudo")
-            menu.add(0, 1, 1, "Alterar proteção")
-            menu.add(0, 4, 2, "Disfarce de calculadora")
-            menu.add(0, 2, 3, "Bloquear agora")
+            menu.add(0, 5, 1, "Exportar tudo em .zip")
+            menu.add(0, 1, 2, "Alterar proteção")
+            menu.add(0, 4, 3, "Disfarce de calculadora")
+            menu.add(0, 2, 4, "Bloquear agora")
             setOnMenuItemClickListener {
                 when (it.itemId) {
                     1 -> changeProtectionLauncher.launch(
@@ -426,6 +466,7 @@ class MainActivity : AppCompatActivity() {
                         updateHeader()
                     }
                     4 -> disguiseSettings()
+                    5 -> askExportZip()
                 }
                 true
             }
