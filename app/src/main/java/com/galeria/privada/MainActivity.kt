@@ -415,7 +415,7 @@ class MainActivity : AppCompatActivity() {
             setOnMenuItemClickListener {
                 when (it.itemId) {
                     1 -> changeProtectionLauncher.launch(
-                        Intent(this, UnlockActivity::class.java).putExtra(UnlockActivity.EXTRA_CHANGE_MODE, true)
+                        Intent(this@MainActivity, UnlockActivity::class.java).putExtra(UnlockActivity.EXTRA_CHANGE_MODE, true)
                     )
                     2 -> {
                         Session.lockAll()

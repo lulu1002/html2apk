@@ -66,7 +66,7 @@ class DecoyCalculatorActivity : AppCompatActivity() {
 
     private fun onDot() {
         justEvaluated = false
-        val lastNumber = expr.toString().substringAfterLast(Regex("[+\\-×÷]"))
+        val lastNumber = expr.toString().split(Regex("[+\\-×÷]")).last()
         if (!lastNumber.contains('.')) {
             expr.append('.')
             refresh()
