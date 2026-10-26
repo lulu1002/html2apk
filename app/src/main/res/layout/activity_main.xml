@@ -30,6 +30,11 @@
             </LinearLayout>
 
             <ImageButton
+                android:id="@+id/btnMove"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_folder" android:visibility="gone" />
+            <ImageButton
                 android:id="@+id/btnExport"
                 android:layout_width="48dp" android:layout_height="48dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
@@ -54,6 +59,16 @@
             app:tabRippleColor="@android:color/transparent"
             app:tabSelectedTextColor="@color/text"
             app:tabTextColor="@color/muted" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:clipToPadding="false" android:paddingStart="12dp" android:paddingEnd="12dp"
+            android:paddingTop="6dp" android:scrollbars="none">
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/chips"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                app:singleLine="true" app:singleSelection="true" />
+        </HorizontalScrollView>
 
         <FrameLayout
             android:layout_width="match_parent" android:layout_height="0dp"

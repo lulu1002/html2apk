@@ -5,6 +5,9 @@
         <item name="colorOnPrimary">@color/bg</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/text</item>
+        <item name="colorSecondaryContainer">#3B3278</item>
+        <item name="colorOnSecondaryContainer">@color/text</item>
+        <item name="colorOutline">#4A4D70</item>
         <item name="android:windowBackground">@drawable/bg_gradient</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>

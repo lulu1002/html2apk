@@ -1,15 +1,10 @@
 package com.galeria.privada
 
 import android.os.Bundle
-import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.ImageButton
-import android.widget.ImageView
 import android.widget.TextView
-import android.widget.VideoView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
@@ -24,7 +19,7 @@ class ViewerActivity : AppCompatActivity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         setContentView(R.layout.activity_viewer)
 
-        files = Vault.listByType(this, intent.getBooleanExtra("video", false))
+        files = Albums.files(this, intent.getBooleanExtra("video", false), intent.getStringExtra("album"))
         if (files.isEmpty()) {
             finish()
             return
@@ -52,8 +47,7 @@ class ViewerActivity : AppCompatActivity() {
         RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
         private class ImgHolder(val zoom: ZoomImageView) : RecyclerView.ViewHolder(zoom)
-        private class VidHolder(val frame: FrameLayout, val video: VideoView, val play: ImageView) :
-            RecyclerView.ViewHolder(frame)
+        private class VidHolder(val page: VideoPageView) : RecyclerView.ViewHolder(page)
 
         override fun getItemCount() = files.size
 
@@ -69,20 +63,9 @@ class ViewerActivity : AppCompatActivity() {
                 z.layoutParams = full
                 return ImgHolder(z)
             }
-            val frame = FrameLayout(ctx)
-            frame.layoutParams = full
-            val video = VideoView(ctx)
-            frame.addView(
-                video,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            val size = (72 * ctx.resources.displayMetrics.density).toInt()
-            val play = ImageView(ctx)
-            play.setImageResource(R.drawable.ic_play)
-            frame.addView(play, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
-            return VidHolder(frame, video, play)
+            val v = VideoPageView(ctx)
+            v.layoutParams = full
+            return VidHolder(v)
         }
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
@@ -92,26 +75,17 @@ class ViewerActivity : AppCompatActivity() {
                     Thumbs.load(f, holder.zoom, 2048)
                     holder.zoom.reset()
                 }
-                is VidHolder -> {
-                    holder.play.visibility = View.VISIBLE
-                    holder.video.setVideoPath(f.absolutePath)
-                    holder.video.setOnPreparedListener { holder.video.seekTo(1) }
-                    holder.video.setOnCompletionListener { holder.play.visibility = View.VISIBLE }
-                    holder.video.setOnClickListener {
-                        if (holder.video.isPlaying) {
-                            holder.video.pause()
-                            holder.play.visibility = View.VISIBLE
-                        } else {
-                            holder.video.start()
-                            holder.play.visibility = View.GONE
-                        }
-                    }
-                }
+                is VidHolder -> holder.page.bind(f.absolutePath)
             }
         }
 
+        override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+            if (holder is VidHolder) holder.page.pause()
+            super.onViewDetachedFromWindow(holder)
+        }
+
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
-            if (holder is VidHolder) holder.video.stopPlayback()
+            if (holder is VidHolder) holder.page.release()
             super.onViewRecycled(holder)
         }
     }

@@ -185,6 +185,7 @@ object Vault {
                 target = File(dir(ctx), if (ext.isEmpty()) "${stem}_$n" else "${stem}_$n.$ext")
                 n++
             }
+            Albums.forget(ctx, listOf(target.name))
             val input = cr.openInputStream(uri) ?: return false
             input.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
             true
