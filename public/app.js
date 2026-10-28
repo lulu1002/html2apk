@@ -9,7 +9,8 @@ const attachmentsEl = document.getElementById("attachments");
 
 let MAX_FILE_CHARS = 4000; // limite por arquivo para não estourar o contexto
 let MAX_TOTAL_ATTACH_CHARS = 9000; // limite somado de todos os anexos de uma mensagem
-let MAX_HISTORY_TURNS = 5; // pares (usuário+assistente) mantidos como contexto enviado à API
+let MAX_HISTORY_TURNS = 5;
+let REQUEST_BUDGET_CHARS = 18000; // teto de caracteres enviados por requisição (≈ 3,5 car./token) // pares (usuário+assistente) mantidos como contexto enviado à API
 const STORAGE_KEY = "codeia_history_v1";
 const TEXT_EXTENSIONS = [
   "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "cs", "go",
@@ -24,16 +25,18 @@ const SYSTEM_PROMPT =
   "o código faz antes ou depois do bloco. Quando o pedido envolver gerar " +
   "vários arquivos de um projeto completo, para CADA arquivo escreva uma " +
   "linha exatamente no formato `Arquivo: caminho/nome.ext` imediatamente " +
-  "antes do bloco de código correspondente, um bloco por arquivo.";
+  "antes do bloco de código correspondente, um bloco por arquivo. Ao alterar um arquivo " +
+  "existente do projeto, devolva sempre o arquivo COMPLETO (nunca trechos com \"...\"), " +
+  "com o mesmo caminho da árvore do projeto.";
 
 // ---------- Configurações (servidor ou chave própria, ideal pro APK) ----------
 const SETTINGS_KEY = "codeia_settings_v1";
-const CTX_PRESETS = { eco: [4000, 9000, 5], normal: [12000, 30000, 8], grande: [30000, 80000, 12] };
+const CTX_PRESETS = { eco: [3000, 6000, 4, 12000], normal: [5000, 10000, 6, 18000], grande: [12000, 24000, 10, 40000] };
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 let settings = { ctx: "normal", serverUrl: "", groqKey: "", accessCode: "" };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")); } catch {}
 function applyCtx() {
-  [MAX_FILE_CHARS, MAX_TOTAL_ATTACH_CHARS, MAX_HISTORY_TURNS] = CTX_PRESETS[settings.ctx] || CTX_PRESETS.normal;
+  [MAX_FILE_CHARS, MAX_TOTAL_ATTACH_CHARS, MAX_HISTORY_TURNS, REQUEST_BUDGET_CHARS] = CTX_PRESETS[settings.ctx] || CTX_PRESETS.normal;
 }
 applyCtx();
 
@@ -73,6 +76,21 @@ function chatRequest(messages, model, signal) {
   });
 }
 
+// Monta o que realmente vai pra API: anexos antigos saem do histórico e as trocas mais
+// velhas são descartadas até caber no teto (evita "Request too large" no plano grátis)
+function fitMessages(msgs) {
+  const slim = msgs.map((m, i) => {
+    if (m.role === "user" && i < msgs.length - 1) {
+      const k = m.content.indexOf("\n\nArquivos anexados:");
+      if (k > -1) return { ...m, content: m.content.slice(0, k) + "\n[arquivos anexados desta mensagem omitidos do histórico]" };
+    }
+    return m;
+  });
+  const size = (a) => a.reduce((s, m) => s + m.content.length, 0);
+  while (slim.length > 2 && size(slim) > REQUEST_BUDGET_CHARS) slim.splice(1, 1);
+  return slim;
+}
+
 // Salvar/baixar arquivo: no APK usa Filesystem + Share (downloads por <a> não funcionam no WebView)
 async function saveFile(filename, blob) {
   const P = window.Capacitor && window.Capacitor.Plugins;
@@ -109,33 +127,243 @@ let abortCtl = null;
 const stopBtn = document.getElementById("stopBtn");
 stopBtn.addEventListener("click", () => abortCtl && abortCtl.abort());
 
+// ---------- Projeto persistente (IndexedDB), diff e aplicar ----------
+let project = null; // { name, files: { caminho: texto } }
+const projectBar = document.getElementById("projectBar");
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open("codeia", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function kv(mode, fn) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const t = db.transaction("kv", mode);
+    const rq = fn(t.objectStore("kv"));
+    t.oncomplete = () => res(rq && rq.result);
+    t.onerror = () => rej(t.error);
+  });
+}
+const saveProject = () => kv("readwrite", (s) => (project ? s.put(project, "project") : s.delete("project"))).catch(() => {});
+async function loadProject() {
+  project = (await kv("readonly", (s) => s.get("project")).catch(() => null)) || null;
+  renderProject();
+}
+
+function renderProject() {
+  projectBar.innerHTML = "";
+  projectBar.classList.toggle("hidden", !project);
+  if (!project) return;
+  const label = document.createElement("span");
+  label.textContent = `📁 ${project.name} · ${Object.keys(project.files).length} arquivos`;
+  const dl = document.createElement("button");
+  dl.type = "button"; dl.textContent = "📦 Baixar";
+  dl.addEventListener("click", async () => {
+    const zip = new JSZip();
+    Object.entries(project.files).forEach(([p, c]) => zip.file(p, c));
+    await saveFile(`${project.name}-atualizado.zip`, await zip.generateAsync({ type: "blob" }));
+  });
+  const rm = document.createElement("button");
+  rm.type = "button"; rm.textContent = "✕";
+  rm.addEventListener("click", () => {
+    if (!confirm("Remover o projeto carregado?")) return;
+    project = null; saveProject(); renderProject();
+  });
+  projectBar.append(label, dl, rm);
+}
+
+// Um .zip vira o "projeto": fica salvo no aparelho e só os arquivos relevantes vão a cada pergunta
+async function importZip(file, rejected) {
+  if (typeof JSZip === "undefined") { rejected.push(`${file.name} (suporte a zip não carregou)`); return; }
+  let zip;
+  try { zip = await JSZip.loadAsync(file); } catch { rejected.push(`${file.name} (zip inválido)`); return; }
+  const files = {};
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || IGNORED_PATH_PARTS.some((p) => entry.name.includes(p))) continue;
+    if (!TEXT_EXTENSIONS.includes(entry.name.split(".").pop().toLowerCase())) continue;
+    const text = await entry.async("string").catch(() => null);
+    if (text != null && text.length <= 200000 && Object.keys(files).length < 400) files[entry.name] = text;
+  }
+  const paths = Object.keys(files);
+  if (!paths.length) { rejected.push(`${file.name} (nenhum arquivo de texto reconhecido)`); return; }
+  const roots = new Set(paths.map((p) => p.split("/")[0]));
+  const strip = roots.size === 1 && paths.every((p) => p.includes("/"));
+  project = { name: file.name.replace(/\.zip$/i, ""), files: {} };
+  paths.forEach((p) => { project.files[strip ? p.slice(p.indexOf("/") + 1) : p] = files[p]; });
+  await saveProject();
+  renderProject();
+  addMessage("system", `📁 Projeto **${project.name}** carregado (${paths.length} arquivos). Pergunte e eu uso os arquivos relevantes; mudanças voltam com **Diff** e **Aplicar**.`);
+}
+
+// Árvore + arquivos mais relevantes para o pedido, dentro do orçamento de contexto
+function projectContext(prompt) {
+  if (!project) return "";
+  const q = prompt.toLowerCase();
+  const words = [...new Set(q.match(/[a-z0-9_.\-]{3,}/g) || [])].slice(0, 30);
+  const paths = Object.keys(project.files);
+  const scored = paths.map((p) => {
+    const low = p.toLowerCase(), base = low.split("/").pop(), body = project.files[p].toLowerCase();
+    let s = q.includes(base) ? 100 : 0;
+    words.forEach((w) => { if (low.includes(w)) s += 5; if (body.includes(w)) s += 1; });
+    return [p, s];
+  }).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]);
+  let budget = MAX_TOTAL_ATTACH_CHARS - totalAttachedChars(), out = "";
+  for (const [p] of scored) {
+    const c = project.files[p];
+    if (c.length > MAX_FILE_CHARS || c.length > budget) continue; // nunca manda arquivo cortado
+    budget -= c.length;
+    out += `Arquivo: ${p}\n\`\`\`\n${c}\n\`\`\`\n\n`;
+  }
+  return `\n\nProjeto "${project.name}" - árvore de arquivos:\n${paths.slice(0, 200).join("\n")}\n\nArquivos relevantes:\n${out || "(nenhum coube no contexto; peça para eu focar em um arquivo)"}`;
+}
+
+function lineDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n");
+  let s = 0;
+  while (s < A.length && s < B.length && A[s] === B[s]) s++;
+  let ea = A.length, eb = B.length;
+  while (ea > s && eb > s && A[ea - 1] === B[eb - 1]) { ea--; eb--; }
+  const x = A.slice(s, ea), y = B.slice(s, eb), n = x.length, m = y.length;
+  if (n * m > 4e6) return [`- (${n} linhas removidas)`, `+ (${m} linhas adicionadas)`];
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let k = m - 1; k >= 0; k--)
+      L[i][k] = x[i] === y[k] ? L[i + 1][k + 1] + 1 : Math.max(L[i + 1][k], L[i][k + 1]);
+  const out = [];
+  let i = 0, k = 0;
+  while (i < n && k < m) {
+    if (x[i] === y[k]) { i++; k++; }
+    else if (L[i + 1][k] >= L[i][k + 1]) out.push("- " + x[i++]);
+    else out.push("+ " + y[k++]);
+  }
+  while (i < n) out.push("- " + x[i++]);
+  while (k < m) out.push("+ " + y[k++]);
+  return out;
+}
+
+function addApplyButtons(toolbar, pre, block, path) {
+  const mk = (t) => { const b = document.createElement("button"); b.type = "button"; b.className = "copy-btn"; b.textContent = t; return b; };
+  const diffEl = document.createElement("pre");
+  diffEl.className = "diff hidden";
+  const dBtn = mk("Diff"), aBtn = mk("✔ Aplicar");
+  dBtn.addEventListener("click", () => {
+    const old = project.files[path], nw = block.textContent;
+    if (old === undefined) diffEl.textContent = `Arquivo novo: ${path} (${nw.split("\n").length} linhas)`;
+    else {
+      const d = lineDiff(old.trimEnd(), nw.trimEnd());
+      diffEl.innerHTML = d.length
+        ? d.map((l) => `<span class="${l[0] === "+" ? "add" : "del"}">${escapeHtml(l)}</span>`).join("")
+        : "Sem mudanças.";
+    }
+    diffEl.classList.toggle("hidden");
+  });
+  aBtn.addEventListener("click", async () => {
+    const nw = block.textContent, old = project.files[path];
+    if (old && nw.split("\n").length < old.split("\n").length * 0.6 &&
+        !confirm("O novo arquivo é bem menor que o original (pode estar incompleto). Aplicar mesmo assim?")) return;
+    project.files[path] = nw;
+    await saveProject();
+    renderProject();
+    aBtn.textContent = "Aplicado ✓";
+  });
+  toolbar.append(dBtn, aBtn);
+  pre.after(diffEl);
+}
+
 let history = [{ role: "system", content: SYSTEM_PROMPT }];
 let attachedFiles = []; // { name, content }
 
 // ---------- Persistência local (localStorage) ----------
-function saveHistory() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-  } catch {
-    // localStorage indisponível (modo privado etc.) - segue sem persistir
+// Várias conversas salvas no aparelho (localStorage), com migração do histórico antigo
+const CONVS_KEY = "codeia_convs_v1";
+let convs = { active: null, list: [] };
+
+function newConv(h) {
+  const c = { id: Date.now().toString(36), title: "Nova conversa", history: h || [{ role: "system", content: SYSTEM_PROMPT }], updated: Date.now() };
+  convs.list.unshift(c);
+  convs.active = c.id;
+  return c;
+}
+function persistConvs() {
+  convs.list.sort((x, y) => y.updated - x.updated);
+  convs.list = convs.list.slice(0, 30);
+  try { localStorage.setItem(CONVS_KEY, JSON.stringify(convs)); } catch {} // sem espaço/modo privado: segue sem salvar
+}
+function loadConvs() {
+  try { convs = JSON.parse(localStorage.getItem(CONVS_KEY)) || convs; } catch {}
+  if (!convs.list.length) {
+    let old = null;
+    try { old = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch {}
+    newConv(Array.isArray(old) && old.length && old[0].role === "system" ? old : null);
   }
+  if (!convs.list.find((c) => c.id === convs.active)) convs.active = convs.list[0].id;
+}
+function saveHistory() {
+  const c = convs.list.find((x) => x.id === convs.active);
+  if (!c) return;
+  c.history = history;
+  const u = history.find((m) => m.role === "user");
+  c.title = u ? u.content.split("\n")[0].slice(0, 40) || "Conversa" : "Nova conversa";
+  c.updated = Date.now();
+  persistConvs();
+}
+// carrega a conversa ativa na tela; retorna true se ela já tem mensagens
+function loadHistory() {
+  if (!convs.list.length) loadConvs();
+  const c = convs.list.find((x) => x.id === convs.active);
+  history = c.history;
+  chatLog.innerHTML = "";
+  const rest = history.slice(1);
+  rest.forEach((m) => addMessage(m.role === "user" ? "user" : "assistant", m.content));
+  return rest.length > 0;
+}
+function showWelcome() {
+  addMessage("system", "**CodeIA** — assistente de programação. Escreva seu pedido abaixo; anexe arquivos ou um .zip do projeto como contexto.");
 }
 
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return false;
-    const saved = JSON.parse(raw);
-    if (!Array.isArray(saved) || !saved.length || saved[0].role !== "system") return false;
-    history = saved;
-    history.slice(1).forEach((msg) => {
-      addMessage(msg.role === "user" ? "user" : "assistant", msg.content);
-    });
-    return true;
-  } catch {
-    return false;
-  }
+const convDlg = document.getElementById("convDlg");
+const isGenerating = () => !stopBtn.classList.contains("hidden");
+function openConv(id) {
+  convs.active = id;
+  attachedFiles = [];
+  renderAttachments();
+  if (!loadHistory()) showWelcome();
+  persistConvs();
 }
+function renderConvList() {
+  const box = document.getElementById("convList");
+  box.innerHTML = "";
+  convs.list.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "conv-row" + (c.id === convs.active ? " active" : "");
+    const t = document.createElement("button");
+    t.type = "button"; t.textContent = c.title;
+    t.addEventListener("click", () => { openConv(c.id); convDlg.close(); });
+    const d = document.createElement("button");
+    d.type = "button"; d.textContent = "🗑";
+    d.addEventListener("click", () => {
+      if (!confirm("Apagar esta conversa?")) return;
+      convs.list = convs.list.filter((x) => x.id !== c.id);
+      if (!convs.list.length) newConv();
+      if (c.id === convs.active) openConv(convs.list[0].id); else persistConvs();
+      renderConvList();
+    });
+    row.append(t, d);
+    box.appendChild(row);
+  });
+}
+document.getElementById("convBtn").addEventListener("click", () => {
+  if (isGenerating()) { alert("Pare a geração antes de trocar de conversa."); return; }
+  renderConvList();
+  convDlg.showModal();
+});
+document.getElementById("newConv").addEventListener("click", () => {
+  newConv();
+  openConv(convs.active);
+  convDlg.close();
+});
+document.getElementById("closeConv").addEventListener("click", () => convDlg.close());
 
 clearBtn.addEventListener("click", () => {
   history = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -154,7 +382,7 @@ fileInput.addEventListener("change", async () => {
     const ext = file.name.split(".").pop().toLowerCase();
 
     if (ext === "zip") {
-      await addFromZip(file, rejected);
+      await importZip(file, rejected);
       continue;
     }
 
@@ -273,6 +501,8 @@ composer.addEventListener("submit", async (e) => {
 
   addMessage("user", text, attachedFiles.map((f) => f.name));
   history.push({ role: "user", content: fullUserContent });
+  // o contexto do projeto vai só nesta chamada (não polui o histórico salvo)
+  const sendMsgs = fitMessages(history.slice(0, -1).concat({ role: "user", content: fullUserContent + projectContext(text) }));
   saveHistory();
   promptInput.value = "";
   attachedFiles = [];
@@ -282,12 +512,13 @@ composer.addEventListener("submit", async (e) => {
 
   const assistantEl = addMessage("assistant", "…");
   let acc = "";
+  let clean = ""; // só o texto real da IA (sem avisos de erro)
 
   try {
     abortCtl = new AbortController();
     stopBtn.classList.remove("hidden");
     sendBtn.classList.add("hidden");
-    const res = await chatRequest(history, modelSelect.value, abortCtl.signal);
+    const res = await chatRequest(sendMsgs, modelSelect.value, abortCtl.signal);
 
     if (!res.ok || !res.body) {
       const errData = await res.json().catch(() => ({}));
@@ -317,6 +548,7 @@ composer.addEventListener("submit", async (e) => {
           const json = JSON.parse(payload);
           const delta = json.choices?.[0]?.delta?.content || "";
           acc += delta;
+          clean = acc;
           renderInto(assistantEl, acc);
         } catch {
           // ignora linhas parciais/erros de parse pontuais
@@ -335,7 +567,13 @@ composer.addEventListener("submit", async (e) => {
   stopBtn.classList.add("hidden");
   sendBtn.classList.remove("hidden");
 
-  history.push({ role: "assistant", content: acc });
+  if (!clean.trim()) {
+    // falhou/interrompeu sem resposta: tira a pergunta do histórico e devolve o texto pro campo
+    history.pop();
+    promptInput.value = text;
+  } else {
+    history.push({ role: "assistant", content: clean });
+  }
   pruneHistory();
   saveHistory();
   sendBtn.disabled = false;
@@ -431,6 +669,10 @@ function renderInto(el, raw) {
       toolbar.appendChild(prevBtn);
       pre.after(frame);
     }
+
+    const prev = pre.previousElementSibling;
+    const pm = project && prev && prev.tagName === "P" && prev.textContent.match(/Arquivo:\s*([^\s`]+)\s*$/);
+    if (pm) addApplyButtons(toolbar, pre, block, pm[1].replace(/^\.\//, ""));
 
     pre.prepend(toolbar);
   });
@@ -580,10 +822,6 @@ function escapeHtml(str) {
 }
 
 // ---------- Inicialização ----------
-if (!loadHistory()) {
-  addMessage(
-    "system",
-    "**CodeIA** usa a API da Groq para gerar as respostas. Escreva seu pedido " +
-      "abaixo (pode anexar arquivos de código ou um .zip do projeto como contexto)."
-  );
-}
+loadProject();
+loadConvs();
+if (!loadHistory()) showWelcome();

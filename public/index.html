@@ -22,6 +22,7 @@
         <option value="qwen/qwen3.6-27b">qwen3.6-27b (ótimo em código)</option>
         <option value="moonshotai/kimi-k2-instruct">kimi-k2-instruct</option>
       </select>
+      <button type="button" id="convBtn" title="Conversas">☰</button>
       <button type="button" id="settingsBtn" title="Configurações">⚙️</button>
       <button type="button" id="clearBtn" title="Limpar conversa">🗑️</button>
     </div>
@@ -29,6 +30,8 @@
 
   <main class="chat-shell">
     <div id="chatLog" class="chat-log"></div>
+
+    <div id="projectBar" class="projectbar hidden"></div>
 
     <div id="attachments" class="attachments hidden"></div>
 
@@ -49,6 +52,13 @@
       <button type="button" id="stopBtn" class="hidden">⏹ Parar</button>
     </form>
   </main>
+
+  <dialog id="convDlg">
+    <h3>Conversas</h3>
+    <button type="button" id="newConv">+ Nova conversa</button>
+    <div id="convList"></div>
+    <button type="button" id="closeConv" class="secondary">Fechar</button>
+  </dialog>
 
   <dialog id="settingsDlg">
     <h3>Configurações</h3>

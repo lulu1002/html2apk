@@ -117,3 +117,15 @@ em `public/index.html` se algum desses for descontinuado.
 4. No app, abra ⚙️ e informe **a URL do seu servidor no Render** (+ código de acesso, se usar) **ou** sua chave da Groq.
 
 Local: `npm install && npm run www && npx cap add android && npx cap sync android`.
+
+## Projeto, Diff e Aplicar (v4)
+
+Anexe um `.zip` e ele vira o **projeto**: fica salvo no aparelho (IndexedDB), e a cada pergunta vão só a árvore de arquivos e os mais relevantes (cabendo no contexto de ⚙️). Quando a IA devolver `Arquivo: caminho` + código, o bloco ganha **Diff** (linhas removidas/adicionadas) e **✔ Aplicar** (atualiza o projeto salvo). **📦 Baixar** exporta o projeto atualizado em .zip. Arquivos maiores que o limite de contexto não são enviados, para a IA nunca devolver um arquivo incompleto.
+
+## Várias conversas (v5)
+
+O botão **☰** abre a lista de conversas: crie uma nova, volte para uma antiga ou apague. Ficam salvas no aparelho (até 30; as mais antigas saem primeiro) e o título vem da primeira mensagem. O histórico da versão anterior é migrado sozinho. Para trocar de conversa, pare a geração antes.
+
+## Limite de tokens (v6)
+
+Cada requisição respeita um teto por preset de ⚙️ (Econômico ≈ 12 mil caracteres, Normal ≈ 18 mil, Grande ≈ 40 mil — o Grande só serve no plano pago da Groq). Anexos de mensagens antigas não são reenviados e as trocas mais velhas caem primeiro. Se a chamada falhar, a pergunta volta para o campo de texto e o erro não entra no histórico.
