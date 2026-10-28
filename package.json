@@ -1,0 +1,24 @@
+{
+  "name": "ia-code-generator",
+  "version": "2.0.0",
+  "description": "Assistente de IA para programacao usando a API da Groq (rapida, com plano gratuito), com a chave protegida no backend.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "www": "node scripts/prepare-www.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/filesystem": "^6.0.1",
+    "@capacitor/share": "^6.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/android": "^6.1.2"
+  }
+}

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>CodeIA — Assistente de programação (Groq)</title>
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">&lt;/&gt;</span>
+      <h1>CodeIA</h1>
+    </div>
+    <div class="model-controls">
+      <select id="modelSelect">
+        <option value="openai/gpt-oss-20b">gpt-oss-20b (rápido, recomendado)</option>
+        <option value="openai/gpt-oss-120b">gpt-oss-120b (mais forte)</option>
+        <option value="qwen/qwen3.6-27b">qwen3.6-27b (ótimo em código)</option>
+        <option value="moonshotai/kimi-k2-instruct">kimi-k2-instruct</option>
+      </select>
+      <button type="button" id="settingsBtn" title="Configurações">⚙️</button>
+      <button type="button" id="clearBtn" title="Limpar conversa">🗑️</button>
+    </div>
+  </header>
+
+  <main class="chat-shell">
+    <div id="chatLog" class="chat-log"></div>
+
+    <div id="attachments" class="attachments hidden"></div>
+
+    <div class="modes" id="modes">
+      <button type="button" data-p="Explique este código passo a passo:\n">Explicar</button>
+      <button type="button" data-p="Revise o código anexado: aponte bugs, problemas de segurança e melhorias, com o trecho corrigido:\n">Revisar</button>
+      <button type="button" data-p="Encontre e corrija o bug. Erro/sintoma:\n">Depurar</button>
+      <button type="button" data-p="Escreva testes automatizados para o código anexado:\n">Testes</button>
+      <button type="button" data-p="Refatore o código anexado mantendo o comportamento:\n">Refatorar</button>
+    </div>
+
+    <form id="composer" class="composer">
+      <label for="fileInput" class="attach-btn" title="Anexar arquivos de código">📎</label>
+      <input type="file" id="fileInput" multiple hidden
+             accept=".js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rb,.php,.html,.css,.json,.md,.txt,.sql,.sh,.yml,.yaml,.xml,.kt,.swift,.rs,.zip" />
+      <textarea id="promptInput" rows="2" placeholder="Descreva o código que você precisa…"></textarea>
+      <button type="submit" id="sendBtn">Enviar</button>
+      <button type="button" id="stopBtn" class="hidden">⏹ Parar</button>
+    </form>
+  </main>
+
+  <dialog id="settingsDlg">
+    <h3>Configurações</h3>
+    <label>Contexto enviado à IA
+      <select id="ctxSelect">
+        <option value="eco">Econômico (plano grátis apertado)</option>
+        <option value="normal">Normal</option>
+        <option value="grande">Grande (projetos maiores)</option>
+      </select>
+    </label>
+    <label>URL do servidor (opcional)
+      <input id="serverUrl" placeholder="https://seu-app.onrender.com" />
+    </label>
+    <label>Chave da Groq (APK sem servidor)
+      <input id="groqKey" type="password" placeholder="gsk_..." />
+    </label>
+    <label>Código de acesso (se o servidor exigir)
+      <input id="accessCode" type="password" />
+    </label>
+    <p class="hint">No APK: preencha a URL do servidor <b>ou</b> sua chave da Groq. A chave fica só neste aparelho.</p>
+    <button type="button" id="saveSettings">Salvar</button>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
