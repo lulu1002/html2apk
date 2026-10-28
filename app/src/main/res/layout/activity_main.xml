@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/bg_gradient" android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:gravity="center_vertical" android:orientation="horizontal"
+            android:paddingStart="20dp" android:paddingTop="16dp"
+            android:paddingEnd="8dp" android:paddingBottom="12dp">
+
+            <LinearLayout
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView
+                    android:id="@+id/tvTitle"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Galeria Privada" android:textColor="@color/text"
+                    android:textSize="26sp" android:textStyle="bold" />
+                <TextView
+                    android:id="@+id/tvCount"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:textColor="@color/muted" android:textSize="13sp" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/btnMove"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_folder" android:visibility="gone" />
+            <ImageButton
+                android:id="@+id/btnExport"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_download" android:visibility="gone" />
+            <ImageButton
+                android:id="@+id/btnDelete"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_delete" android:visibility="gone" />
+            <ImageButton
+                android:id="@+id/btnMenu"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_more" />
+        </LinearLayout>
+
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/tabs"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:background="@android:color/transparent"
+            app:tabIndicatorColor="@color/accent"
+            app:tabRippleColor="@android:color/transparent"
+            app:tabSelectedTextColor="@color/text"
+            app:tabTextColor="@color/muted" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:clipToPadding="false" android:paddingStart="12dp" android:paddingEnd="12dp"
+            android:paddingTop="6dp" android:scrollbars="none">
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/chips"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                app:singleLine="true" app:singleSelection="true" />
+        </HorizontalScrollView>
+
+        <FrameLayout
+            android:layout_width="match_parent" android:layout_height="0dp"
+            android:layout_weight="1">
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:clipToPadding="false" android:paddingStart="5dp"
+                android:paddingEnd="5dp" android:paddingBottom="96dp" />
+
+            <LinearLayout
+                android:id="@+id/empty"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:gravity="center" android:orientation="vertical" android:visibility="gone">
+                <ImageView
+                    android:layout_width="72dp" android:layout_height="72dp"
+                    android:alpha="0.6" android:src="@drawable/ic_vault" />
+                <TextView
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp" android:text="Nada por aqui ainda"
+                    android:textColor="@color/text" android:textSize="18sp" />
+                <TextView
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp" android:text="Toque em Adicionar para guardar fotos e vídeos"
+                    android:textColor="@color/muted" android:textSize="13sp" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/fabAdd"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end" android:layout_margin="20dp"
+        android:text="Adicionar" android:textColor="@color/bg"
+        app:backgroundTint="@color/accent" app:icon="@drawable/ic_add" app:iconTint="@color/bg" />
+</FrameLayout>
