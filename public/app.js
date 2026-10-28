@@ -33,7 +33,7 @@ const SYSTEM_PROMPT =
 const SETTINGS_KEY = "codeia_settings_v1";
 const CTX_PRESETS = { eco: [3000, 6000, 4, 12000], normal: [5000, 10000, 6, 18000], grande: [12000, 24000, 10, 40000] };
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-let settings = { ctx: "normal", serverUrl: "", groqKey: "", accessCode: "" };
+let settings = { ctx: "normal", serverUrl: "", groqKey: "", accessCode: "", customModel: "", customVision: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")); } catch {}
 function applyCtx() {
   [MAX_FILE_CHARS, MAX_TOTAL_ATTACH_CHARS, MAX_HISTORY_TURNS, REQUEST_BUDGET_CHARS] = CTX_PRESETS[settings.ctx] || CTX_PRESETS.normal;
@@ -45,6 +45,8 @@ document.getElementById("settingsBtn").addEventListener("click", () => {
   ["ctx", "serverUrl", "groqKey", "accessCode"].forEach((k) => {
     document.getElementById(k === "ctx" ? "ctxSelect" : k).value = settings[k];
   });
+  document.getElementById("customModel").value = settings.customModel;
+  document.getElementById("customVision").checked = !!settings.customVision;
   settingsDlg.showModal();
 });
 document.getElementById("saveSettings").addEventListener("click", () => {
@@ -53,11 +55,73 @@ document.getElementById("saveSettings").addEventListener("click", () => {
     serverUrl: document.getElementById("serverUrl").value.trim().replace(/\/$/, ""),
     groqKey: document.getElementById("groqKey").value.trim(),
     accessCode: document.getElementById("accessCode").value,
+    customModel: document.getElementById("customModel").value.trim(),
+    customVision: document.getElementById("customVision").checked,
   };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   applyCtx();
+  applyCustomModel(true);
   settingsDlg.close();
 });
+
+// ---------- Compatibilidade entre modelos ----------
+const VISION_RE = /qwen\/qwen3\.[68]-27b|llama-4-(scout|maverick)/i;
+const VISION_FALLBACK = "qwen/qwen3.6-27b";
+function isVision(model) {
+  if (settings.customModel && model === settings.customModel) return !!settings.customVision;
+  return VISION_RE.test(model);
+}
+function applyCustomModel(select) {
+  modelSelect.querySelectorAll("option[data-custom]").forEach((o) => o.remove());
+  if (!settings.customModel) return;
+  const o = new Option("★ " + settings.customModel + (settings.customVision ? " (visão)" : ""), settings.customModel);
+  o.dataset.custom = "1";
+  modelSelect.appendChild(o);
+  if (select) modelSelect.value = settings.customModel;
+}
+applyCustomModel(false);
+
+// Converte o histórico para o formato da API conforme o modelo: com visão manda as imagens
+// (content em partes); sem visão manda só texto. Nunca envia campos extras (imgs).
+function toApi(msgs, model) {
+  const vis = isVision(model);
+  return msgs.map((m) => {
+    if (m.imgs && m.imgs.length) {
+      if (vis) {
+        return { role: m.role, content: [{ type: "text", text: m.content }, ...m.imgs.map((u) => ({ type: "image_url", image_url: { url: u } }))] };
+      }
+      return { role: m.role, content: m.content + "\n[imagens omitidas: este modelo não lê imagens]" };
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
+// Reduz a imagem (máx. 896 px, JPEG) pra caber no limite de tokens do plano grátis
+function loadImage(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 896 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * s));
+      c.height = Math.max(1, Math.round(img.height * s));
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("imagem inválida")); };
+    img.src = url;
+  });
+}
+async function addImage(file, rejected) {
+  if (attachedImages.length >= 3) { rejected.push(`${file.name} (máximo de 3 imagens por mensagem)`); return; }
+  try { attachedImages.push({ name: file.name, url: await loadImage(file) }); }
+  catch { rejected.push(`${file.name} (não foi possível ler a imagem)`); }
+}
 
 function chatRequest(messages, model, signal) {
   const useServer = settings.serverUrl || !IS_NATIVE;
@@ -80,13 +144,15 @@ function chatRequest(messages, model, signal) {
 // velhas são descartadas até caber no teto (evita "Request too large" no plano grátis)
 function fitMessages(msgs) {
   const slim = msgs.map((m, i) => {
-    if (m.role === "user" && i < msgs.length - 1) {
-      const k = m.content.indexOf("\n\nArquivos anexados:");
-      if (k > -1) return { ...m, content: m.content.slice(0, k) + "\n[arquivos anexados desta mensagem omitidos do histórico]" };
-    }
-    return m;
+    if (m.role !== "user" || i >= msgs.length - 1) return m;
+    let c = m.content;
+    const k = c.indexOf("\n\nArquivos anexados:");
+    if (k > -1) c = c.slice(0, k) + "\n[arquivos anexados desta mensagem omitidos do histórico]";
+    if (m.imgs && m.imgs.length) c += "\n[imagens omitidas do histórico]";
+    return { ...m, content: c, imgs: undefined };
   });
-  const size = (a) => a.reduce((s, m) => s + m.content.length, 0);
+  // cada imagem pesa ~5000 caracteres de orçamento (≈1400 tokens)
+  const size = (a) => a.reduce((s, m) => s + m.content.length + (m.imgs ? m.imgs.length * 5000 : 0), 0);
   while (slim.length > 2 && size(slim) > REQUEST_BUDGET_CHARS) slim.splice(1, 1);
   return slim;
 }
@@ -272,7 +338,8 @@ function addApplyButtons(toolbar, pre, block, path) {
 }
 
 let history = [{ role: "system", content: SYSTEM_PROMPT }];
-let attachedFiles = []; // { name, content }
+let attachedFiles = [];
+let attachedImages = []; // { name, url } (JPEG reduzido)
 
 // ---------- Persistência local (localStorage) ----------
 // Várias conversas salvas no aparelho (localStorage), com migração do histórico antigo
@@ -288,7 +355,8 @@ function newConv(h) {
 function persistConvs() {
   convs.list.sort((x, y) => y.updated - x.updated);
   convs.list = convs.list.slice(0, 30);
-  try { localStorage.setItem(CONVS_KEY, JSON.stringify(convs)); } catch {} // sem espaço/modo privado: segue sem salvar
+  // imagens não vão pro localStorage; sem espaço/modo privado: segue sem salvar
+  try { localStorage.setItem(CONVS_KEY, JSON.stringify(convs, (k, v) => (k === "imgs" ? undefined : v))); } catch {}
 }
 function loadConvs() {
   try { convs = JSON.parse(localStorage.getItem(CONVS_KEY)) || convs; } catch {}
@@ -326,7 +394,7 @@ const convDlg = document.getElementById("convDlg");
 const isGenerating = () => !stopBtn.classList.contains("hidden");
 function openConv(id) {
   convs.active = id;
-  attachedFiles = [];
+  attachedFiles = []; attachedImages = [];
   renderAttachments();
   if (!loadHistory()) showWelcome();
   persistConvs();
@@ -367,7 +435,7 @@ document.getElementById("closeConv").addEventListener("click", () => convDlg.clo
 
 clearBtn.addEventListener("click", () => {
   history = [{ role: "system", content: SYSTEM_PROMPT }];
-  attachedFiles = [];
+  attachedFiles = []; attachedImages = [];
   renderAttachments();
   chatLog.innerHTML = "";
   saveHistory();
@@ -380,6 +448,11 @@ fileInput.addEventListener("change", async () => {
   const rejected = [];
   for (const file of files) {
     const ext = file.name.split(".").pop().toLowerCase();
+
+    if (file.type.startsWith("image/")) {
+      await addImage(file, rejected);
+      continue;
+    }
 
     if (ext === "zip") {
       await importZip(file, rejected);
@@ -464,7 +537,7 @@ async function addFromZip(file, rejected) {
 
 function renderAttachments() {
   attachmentsEl.innerHTML = "";
-  if (!attachedFiles.length) {
+  if (!attachedFiles.length && !attachedImages.length) {
     attachmentsEl.classList.add("hidden");
     return;
   }
@@ -483,12 +556,23 @@ function renderAttachments() {
     chip.appendChild(rm);
     attachmentsEl.appendChild(chip);
   });
+  attachedImages.forEach((im, i) => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.innerHTML = `<span>🖼️ ${escapeHtml(im.name)}</span>`;
+    const rm = document.createElement("button");
+    rm.textContent = "✕";
+    rm.type = "button";
+    rm.addEventListener("click", () => { attachedImages.splice(i, 1); renderAttachments(); });
+    chip.appendChild(rm);
+    attachmentsEl.appendChild(chip);
+  });
 }
 
 // ---------- Envio de prompt ----------
 composer.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const text = promptInput.value.trim();
+  const text = promptInput.value.trim() || (attachedImages.length ? "Descreva e analise esta imagem." : "");
   if (!text) return;
 
   let fullUserContent = text;
@@ -499,13 +583,22 @@ composer.addEventListener("submit", async (e) => {
     fullUserContent = `${text}\n\nArquivos anexados:\n${filesBlock}`;
   }
 
-  addMessage("user", text, attachedFiles.map((f) => f.name));
-  history.push({ role: "user", content: fullUserContent });
+  const imgUrls = attachedImages.map((i) => i.url);
+  addMessage("user", text, attachedFiles.map((f) => f.name).concat(attachedImages.map((i) => "🖼️ " + i.name)), imgUrls);
+  history.push({ role: "user", content: fullUserContent, imgs: imgUrls });
   // o contexto do projeto vai só nesta chamada (não polui o histórico salvo)
-  const sendMsgs = fitMessages(history.slice(0, -1).concat({ role: "user", content: fullUserContent + projectContext(text) }));
+  // modelo sem visão + imagem anexada: usa um modelo com visão só nesta mensagem
+  let model = modelSelect.value;
+  if (imgUrls.length && !isVision(model)) {
+    const alt = [...modelSelect.options].map((o) => o.value).find(isVision) || VISION_FALLBACK;
+    addMessage("system", `🖼️ ${model} não lê imagens; usei ${alt} só nesta mensagem.`);
+    model = alt;
+  }
+  const sendMsgs = fitMessages(history.slice(0, -1).concat({ role: "user", content: fullUserContent + projectContext(text), imgs: imgUrls }));
+  const apiMsgs = toApi(sendMsgs, model);
   saveHistory();
   promptInput.value = "";
-  attachedFiles = [];
+  attachedFiles = []; attachedImages = [];
   renderAttachments();
   sendBtn.disabled = true;
   promptInput.disabled = true;
@@ -518,7 +611,7 @@ composer.addEventListener("submit", async (e) => {
     abortCtl = new AbortController();
     stopBtn.classList.remove("hidden");
     sendBtn.classList.add("hidden");
-    const res = await chatRequest(sendMsgs, modelSelect.value, abortCtl.signal);
+    const res = await chatRequest(apiMsgs, model, abortCtl.signal);
 
     if (!res.ok || !res.body) {
       const errData = await res.json().catch(() => ({}));
@@ -593,7 +686,7 @@ function pruneHistory() {
 }
 
 // ---------- Renderização ----------
-function addMessage(role, text, fileNames) {
+function addMessage(role, text, fileNames, imgs) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   chatLog.appendChild(div);
@@ -602,6 +695,7 @@ function addMessage(role, text, fileNames) {
     content += `\n\n_(anexos: ${fileNames.join(", ")})_`;
   }
   renderInto(div, content);
+  (imgs || []).forEach((u) => { const im = document.createElement("img"); im.src = u; im.className = "thumb"; div.appendChild(im); });
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
 }

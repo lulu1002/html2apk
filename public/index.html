@@ -19,7 +19,8 @@
       <select id="modelSelect">
         <option value="openai/gpt-oss-20b">gpt-oss-20b (rápido, recomendado)</option>
         <option value="openai/gpt-oss-120b">gpt-oss-120b (mais forte)</option>
-        <option value="qwen/qwen3.6-27b">qwen3.6-27b (ótimo em código)</option>
+        <option value="qwen/qwen3.6-27b">qwen3.6-27b (código + imagens)</option>
+        <option value="qwen/qwen3.8-27b">qwen3.8-27b (código + imagens)</option>
         <option value="moonshotai/kimi-k2-instruct">kimi-k2-instruct</option>
       </select>
       <button type="button" id="convBtn" title="Conversas">☰</button>
@@ -46,7 +47,7 @@
     <form id="composer" class="composer">
       <label for="fileInput" class="attach-btn" title="Anexar arquivos de código">📎</label>
       <input type="file" id="fileInput" multiple hidden
-             accept=".js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rb,.php,.html,.css,.json,.md,.txt,.sql,.sh,.yml,.yaml,.xml,.kt,.swift,.rs,.zip" />
+             accept=".js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rb,.php,.html,.css,.json,.md,.txt,.sql,.sh,.yml,.yaml,.xml,.kt,.swift,.rs,.zip,image/*" />
       <textarea id="promptInput" rows="2" placeholder="Descreva o código que você precisa…"></textarea>
       <button type="submit" id="sendBtn">Enviar</button>
       <button type="button" id="stopBtn" class="hidden">⏹ Parar</button>
@@ -69,6 +70,10 @@
         <option value="grande">Grande (projetos maiores)</option>
       </select>
     </label>
+    <label>Modelo personalizado (ID da Groq)
+      <input id="customModel" placeholder="ex.: llama-3.3-70b-versatile" />
+    </label>
+    <label><input type="checkbox" id="customVision" style="width:auto" /> esse modelo aceita imagens</label>
     <label>URL do servidor (opcional)
       <input id="serverUrl" placeholder="https://seu-app.onrender.com" />
     </label>

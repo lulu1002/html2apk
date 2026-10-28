@@ -129,3 +129,7 @@ O botão **☰** abre a lista de conversas: crie uma nova, volte para uma antiga
 ## Limite de tokens (v6)
 
 Cada requisição respeita um teto por preset de ⚙️ (Econômico ≈ 12 mil caracteres, Normal ≈ 18 mil, Grande ≈ 40 mil — o Grande só serve no plano pago da Groq). Anexos de mensagens antigas não são reenviados e as trocas mais velhas caem primeiro. Se a chamada falhar, a pergunta volta para o campo de texto e o erro não entra no histórico.
+
+## Imagens e modelos diferentes (v7)
+
+O 📎 aceita imagens (até 3 por mensagem). Elas são reduzidas (máx. 896 px, JPEG) e só vão para modelos com visão (`qwen3.6-27b`, `qwen3.8-27b`). Se o modelo escolhido não lê imagens, o app usa um com visão só naquela mensagem e avisa. Imagens de mensagens antigas não são reenviadas e não ficam salvas no histórico. Em ⚙️ dá para cadastrar um **modelo personalizado** (ID da Groq) e marcar se ele aceita imagens.

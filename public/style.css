@@ -278,3 +278,5 @@ textarea {
 .conv-row.active button:first-child { outline: 2px solid var(--accent-2); }
 #convDlg .conv-row button { background: var(--bg); color: var(--text); border: 1px solid var(--border); font-weight: 400; text-align: left; }
 #convDlg .conv-row button:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.thumb { display: inline-block; max-width: 140px; max-height: 140px; border-radius: 8px; margin: 6px 6px 0 0; }
