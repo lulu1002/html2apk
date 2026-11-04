@@ -21,6 +21,7 @@ object Pg {
         p.setProperty("connectTimeout", "10")
         p.setProperty("socketTimeout", "300")
         p.setProperty("ApplicationName", "PgManager")
+        p.setProperty("prepareThreshold", "0")
         if (c.ssl) {
             p.setProperty("ssl", "true")
             p.setProperty("sslfactory", "org.postgresql.ssl.NonValidatingFactory")
