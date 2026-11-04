@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "DnsSwitchVpn"
+rootProject.name = "PgManager"
 include(":app")
