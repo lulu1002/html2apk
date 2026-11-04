@@ -2,6 +2,7 @@ package com.pgmanager.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -71,7 +72,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -103,9 +107,41 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val store = ConnectionStore(applicationContext)
+        val sp = getSharedPreferences("crash", MODE_PRIVATE)
+        val lastCrash = sp.getString("trace", null)
+        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            sp.edit().putString("trace", Log.getStackTraceString(e)).commit()
+            oldHandler?.uncaughtException(t, e)
+        }
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                Surface(Modifier.fillMaxSize()) { App(store) }
+                Surface(Modifier.fillMaxSize()) {
+                    App(store)
+                    var crash by remember { mutableStateOf(lastCrash) }
+                    val clip = LocalClipboardManager.current
+                    crash?.let { trace ->
+                        AlertDialog(
+                            onDismissRequest = { },
+                            title = { Text("O app fechou por um erro") },
+                            text = {
+                                SelectionContainer {
+                                    Text(
+                                        trace.take(2500),
+                                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                                        style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { clip.setText(AnnotatedString(trace)) }) { Text("Copiar") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { sp.edit().remove("trace").apply(); crash = null }) { Text("Fechar") }
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -153,8 +189,8 @@ fun <T> rememberAsync(key: Any?, block: () -> T): Pair<AsyncState<T>, () -> Unit
             state.data = withContext(Dispatchers.IO) { latest() }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            state.error = e.message ?: e.toString()
+        } catch (e: Throwable) {
+            state.error = e.toString()
         }
         state.loading = false
     }
@@ -170,8 +206,8 @@ fun CoroutineScope.runOp(snack: SnackbarHostState, okMsg: String, after: () -> U
             snack.showSnackbar(okMsg)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            snack.showSnackbar("Erro: ${e.message}")
+        } catch (e: Throwable) {
+            snack.showSnackbar("Erro: ${e}")
         }
     }
 }
@@ -379,8 +415,8 @@ fun ConnectionDialog(initial: ConnInfo?, onDismiss: () -> Unit, onSave: (ConnInf
                         status = withContext(Dispatchers.IO) {
                             try {
                                 Pg.connect(c).use { "✓ Conectado (PostgreSQL ${it.metaData.databaseProductVersion})" }
-                            } catch (e: Exception) {
-                                "✗ ${e.message}"
+                            } catch (e: Throwable) {
+                                "✗ ${e}"
                             }
                         }
                     }
@@ -741,8 +777,8 @@ fun SqlScreen(c: ConnInfo, db: String, initial: String, onBack: () -> Unit) {
                 result = withContext(Dispatchers.IO) { Pg.connect(c, db).use { Pg.execute(it, q, 500) } }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                error = e.message ?: e.toString()
+            } catch (e: Throwable) {
+                error = e.toString()
                 result = null
             }
             running = false
