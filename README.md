@@ -1,18 +1,8 @@
-# PgManager
+# Galeria Privada (APK)
 
-Gerenciador PostgreSQL para Android (Kotlin + Jetpack Compose + JDBC).
+1. Suba esta pasta inteira para um repositório no GitHub.
+2. Aba **Actions** > "Build APK" > roda sozinho (ou "Run workflow").
+3. Baixe o `app-debug.apk` em **Artifacts**, instale no celular.
 
-## Como compilar no GitHub Actions
-1. Crie um repositório no GitHub e envie todo o conteúdo desta pasta (push na branch `main`).
-2. Abra a aba **Actions** → workflow **Build APK** (roda sozinho a cada push; também dá para rodar manualmente em *Run workflow*).
-3. Ao terminar, baixe o APK em **Artifacts → PgManager-apk**.
-4. Para publicar em Releases: `git tag v1.0 && git push origin v1.0`.
-
-## Recursos
-- Várias conexões salvas (senhas criptografadas no aparelho), teste de conexão, SSL opcional
-- Listar / criar / excluir bancos
-- Listar tabelas, views e matviews (com filtro), criar tabela via editor SQL
-- Ver dados paginados (100 por página), inserir / editar / excluir linhas
-- Ver estrutura (colunas, tipos, defaults) e índices
-- Esvaziar (TRUNCATE) e excluir tabelas
-- Editor SQL com várias instruções, tempo de execução e exportação CSV (compartilhar)
+Como funciona: ao abrir o app (ou o item "Galeria Privada" no seletor de arquivos
+de qualquer app), é pedida a senha. Primeiro acesso = criar a senha.

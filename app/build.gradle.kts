@@ -4,22 +4,31 @@ plugins {
 }
 
 android {
-    namespace = "com.pgmanager.app"
+    namespace = "com.galeria.privada"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.pgmanager.app"
+        applicationId = "com.galeria.cofre"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("fixa") {
+            storeFile = file("keystore.jks")
+            storePassword = "galeria123"
+            keyAlias = "galeria"
+            keyPassword = "galeria123"
+        }
+    }
+
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("fixa") }
         release {
             isMinifyEnabled = false
-            // assina com a chave debug para o APK ser instalável direto
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixa")
         }
     }
     compileOptions {
@@ -27,28 +36,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
-    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
-    packaging {
-        resources {
-            excludes += setOf(
-                "/META-INF/{AL2.0,LGPL2.1}",
-                "META-INF/DEPENDENCIES",
-                "META-INF/LICENSE*",
-                "META-INF/NOTICE*"
-            )
-        }
-    }
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2024.09.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("org.postgresql:postgresql:42.2.5")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.activity:activity-ktx:1.9.1")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.viewpager2:viewpager2:1.1.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 }
