@@ -1,6 +1,6 @@
 (function(){
 if(window.__gt)return;window.__gt=1;
-var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,speed:1};
+var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,notop:true,speed:1};
 
 /* Mantém a página "visível": o vídeo não pausa em segundo plano */
 try{
@@ -88,6 +88,43 @@ function css(){
 css();
 document.addEventListener('DOMContentLoaded',css);
 
+/* ---------- Esconde a barra do topo (logo YouTube + lupa) na tela de vídeo ---------- */
+addCss('gt-notop',[
+  'html.gt-notop ytm-mobile-topbar-renderer','html.gt-notop header.mobile-topbar-header'
+].join(',')+'{display:none!important}'
+ +'html.gt-notop .gt-nt-t{top:0!important}'
+ +'html.gt-notop .gt-nt-p{padding-top:0!important}'
+ +'html.gt-notop .gt-nt-m{margin-top:0!important}');
+var topH=48;
+/* O site reserva o espaço da barra (top/padding/margin = altura dela). Acha quem usa esse valor e zera. */
+function fixTop(){
+  try{
+    if(!document.documentElement.classList.contains('gt-notop')||!document.body) return;
+    var all=document.body.getElementsByTagName('*'),h=topH;
+    for(var i=0;i<all.length;i++){
+      var el=all[i],cs=getComputedStyle(el);
+      if(cs.display==='none') continue;
+      var p=cs.position;
+      if((p==='fixed'||p==='sticky')&&Math.abs(parseFloat(cs.top)-h)<1.5) el.classList.add('gt-nt-t');
+      if(Math.abs(parseFloat(cs.paddingTop)-h)<1.5) el.classList.add('gt-nt-p');
+      if(Math.abs(parseFloat(cs.marginTop)-h)<1.5) el.classList.add('gt-nt-m');
+    }
+  }catch(e){}
+}
+function updateTop(){
+  if(!cfg.notop||window.__gtMini) return;
+  var rt=document.documentElement,w=location.pathname==='/watch',on=rt.classList.contains('gt-notop');
+  if(w&&!on){
+    var tb=document.querySelector('ytm-mobile-topbar-renderer');
+    var hh=tb?Math.round(tb.getBoundingClientRect().height):0;
+    if(hh>0) topH=hh;
+    rt.classList.add('gt-notop');
+    setTimeout(fixTop,50); setTimeout(fixTop,700); setTimeout(fixTop,2000);
+  }else if(!w&&on){
+    rt.classList.remove('gt-notop');
+  }
+}
+
 /* ---------- Picture-in-picture: o vídeo ocupa a janelinha toda ---------- */
 window.__gtPip=function(on){
   var e=document.getElementById('gt-pip'); if(e) e.remove();
@@ -128,6 +165,19 @@ try{
   var oc=function(e){ if(window.GT) GT.orient(e.matches); };
   if(mq.addEventListener) mq.addEventListener('change',oc); else mq.addListener(oc);
 }catch(e){}
+
+/* ---------- Mini player (WebView secundária do app): só o vídeo, sem controles ---------- */
+if(window.__gtMini){
+  window.__gtGuard=true;
+  setInterval(function(){
+    try{
+      var pl=document.querySelector('.html5-video-player')||document.querySelector('#movie_player');
+      if(pl&&getComputedStyle(pl).position!=='fixed') window.__gtFS(true,true);
+      var v=document.querySelector('video');
+      if(v&&!v.__gtP&&v.paused&&!v.ended){ v.__gtP=1; var pr=v.play(); if(pr&&pr.catch) pr.catch(function(){}); }
+    }catch(e){}
+  },300);
+}
 
 /* ---------- Dislikes (Return YouTube Dislike, via app) ---------- */
 var curVid='',segs=[],dis=null;
@@ -179,6 +229,7 @@ setInterval(function(){
       var it=document.querySelectorAll('ytm-pivot-bar-item-renderer');
       for(var k=0;k<it.length;k++){ if(/^\s*shorts\s*$/i.test(it[k].textContent)) it[k].style.display='none'; }
     }
+    updateTop();
     /* mudou de vídeo */
     var id=vid();
     if(id!==curVid){

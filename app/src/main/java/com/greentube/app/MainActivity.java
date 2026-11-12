@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -17,8 +18,10 @@ import android.util.Rational;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -35,6 +38,7 @@ import androidx.webkit.WebViewFeature;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -76,12 +80,23 @@ public class MainActivity extends Activity {
     private String script = "";
     private volatile boolean playing = false;
     private boolean pseudoFs = false;      // tela cheia automática (própria) ativa
+    private WebView miniWeb;               // mini player: segunda WebView só com o vídeo
+    private FrameLayout miniBox;
+    private long miniGraceUntil = 0;
 
     /** Executa JS na página a partir de qualquer thread (usado pela notificação de mídia). */
     static void js(final String code) {
         final MainActivity a = instance;
         if (a == null) return;
-        a.runOnUiThread(() -> a.web.evaluateJavascript(code, null));
+        // se o mini player existe, os controles da notificação mandam nele
+        a.runOnUiThread(() -> (a.miniWeb != null ? a.miniWeb : a.web).evaluateJavascript(code, null));
+    }
+
+    /** Executa JS numa WebView específica (ignora se ela já foi destruída). */
+    static void jsOn(final WebView w, final String code) {
+        final MainActivity a = instance;
+        if (a == null || w == null) return;
+        a.runOnUiThread(() -> { if (w == a.web || w == a.miniWeb) w.evaluateJavascript(code, null); });
     }
 
     private static boolean isAd(Uri u) {
@@ -104,14 +119,16 @@ public class MainActivity extends Activity {
     // ---------- configurações ----------
     private boolean on(String k) { return prefs.getBoolean(k, true); }
 
-    private String cfgJs() {
-        return "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
-                + ",dis:" + on("dis") + ",speed:" + prefs.getFloat("speed", 1f) + "};";
+    private String cfgJs(boolean mini) {
+        return (mini ? "window.__gtMini=true;" : "")
+                + "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
+                + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop")
+                + ",speed:" + prefs.getFloat("speed", 1f) + "};";
     }
 
     /** (Re)registra o script de início de documento com as configurações atuais. */
     private void registerScript() {
-        script = cfgJs() + injectJs;
+        script = cfgJs(false) + injectJs;
         if (handler != null) { handler.remove(); handler = null; }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             handler = WebViewCompat.addDocumentStartJavaScript(web, script,
@@ -122,8 +139,9 @@ public class MainActivity extends Activity {
     private void showSettings() {
         final String[] names = {"Bloquear anúncios", "Esconder Shorts", "SponsorBlock (pular patrocínios)",
                 "Contador de dislikes", "Picture-in-picture ao sair do app",
-                "Tela cheia automática ao girar o celular"};
-        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs"};
+                "Tela cheia automática ao girar o celular",
+                "Esconder barra do topo (logo e lupa) no vídeo", "Mini player dentro do app ao voltar do vídeo"};
+        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs", "notop", "mini"};
         final boolean[] st = new boolean[keys.length];
         for (int i = 0; i < keys.length; i++) st[i] = on(keys[i]);
         new AlertDialog.Builder(this)
@@ -182,7 +200,11 @@ public class MainActivity extends Activity {
     }
 
     private class Bridge {
+        private final boolean mini;
+        Bridge(boolean mini) { this.mini = mini; }
+
         @JavascriptInterface public void meta(final String title, final boolean pl) {
+            if (mini ? miniWeb == null : miniWeb != null) return; // só quem está "ativo" fala com a notificação
             playing = pl;
             runOnUiThread(() -> {
                 if (KeepAliveService.instance != null)
@@ -191,11 +213,13 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface public void orient(final boolean landscape) {
+            if (mini) return;
             runOnUiThread(() -> handleOrientation(landscape));
         }
 
         @JavascriptInterface public void sponsor(final String id) {
             if (id == null || !VID.matcher(id).matches()) return;
+            final WebView tw = mini ? miniWeb : web;
             new Thread(() -> {
                 try {
                     String url = "https://sponsor.ajay.app/api/skipSegments/" + sha256Prefix(id)
@@ -215,19 +239,20 @@ public class MainActivity extends Activity {
                             }
                         }
                     }
-                    js("window.__gtSB&&window.__gtSB(" + JSONObject.quote(id) + "," + out + ")");
+                    jsOn(tw, "window.__gtSB&&window.__gtSB(" + JSONObject.quote(id) + "," + out + ")");
                 } catch (Exception ignored) {}
             }).start();
         }
 
         @JavascriptInterface public void dislikes(final String id) {
             if (id == null || !VID.matcher(id).matches()) return;
+            final WebView tw = mini ? miniWeb : web;
             new Thread(() -> {
                 try {
                     String body = http("https://returnyoutubedislikeapi.com/votes?videoId=" + id);
                     if (body == null) return;
                     JSONObject o = new JSONObject(body);
-                    js("window.__gtRYD&&window.__gtRYD(" + JSONObject.quote(id) + "," + o.optLong("likes")
+                    jsOn(tw, "window.__gtRYD&&window.__gtRYD(" + JSONObject.quote(id) + "," + o.optLong("likes")
                             + "," + o.optLong("dislikes") + ")");
                 } catch (Exception ignored) {}
             }).start();
@@ -281,7 +306,7 @@ public class MainActivity extends Activity {
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true); // necessário pro login Google manter a sessão
 
-        web.addJavascriptInterface(new Bridge(), "GT");
+        web.addJavascriptInterface(new Bridge(false), "GT");
         registerScript();
 
         web.setWebViewClient(new WebViewClient() {
@@ -301,6 +326,11 @@ public class MainActivity extends Activity {
                 }
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) {}
                 return true;
+            }
+            // Abriu outro vídeo na tela principal (navegação interna do site): fecha o mini player.
+            @Override public void doUpdateVisitedHistory(WebView v, String url, boolean isReload) {
+                if (miniWeb != null && url != null && url.contains("/watch")
+                        && System.currentTimeMillis() > miniGraceUntil) closeMini(true);
             }
             // Reserva para WebViews sem suporte a script de início de documento.
             @Override public void onPageStarted(WebView v, String url, Bitmap f) { v.evaluateJavascript(script, null); }
@@ -356,11 +386,12 @@ public class MainActivity extends Activity {
         super.onPictureInPictureModeChanged(inPip, c);
         gear.setVisibility(inPip || customView != null || pseudoFs ? View.GONE : View.VISIBLE);
         swipe.setEnabled(!inPip && !pseudoFs);
+        if (miniBox != null) miniBox.setVisibility(inPip ? View.GONE : View.VISIBLE);
         if (inPip) {
             // o vídeo ocupa a janelinha toda (mesmo método da tela cheia própria, sem controles)
-            js("window.__gtGuard=true;window.__gtFS&&window.__gtFS(true,true)");
+            web.evaluateJavascript("window.__gtGuard=true;window.__gtFS&&window.__gtFS(true,true)", null);
         } else {
-            js("window.__gtGuard=false;window.__gtFS&&window.__gtFS(" + pseudoFs + ",false)");
+            web.evaluateJavascript("window.__gtGuard=false;window.__gtFS&&window.__gtFS(" + pseudoFs + ",false)", null);
         }
         if (!inPip) {
             final boolean land = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
@@ -392,7 +423,7 @@ public class MainActivity extends Activity {
     /** Tela cheia própria: o player ocupa a tela toda e as barras do sistema somem (sem precisar de toque). */
     private void enterPseudoFs() {
         pseudoFs = true;
-        js("window.__gtFS&&window.__gtFS(true)");
+        web.evaluateJavascript("window.__gtFS&&window.__gtFS(true)", null);
         gear.setVisibility(View.GONE);
         swipe.setEnabled(false);
         goImmersive(true);
@@ -401,7 +432,7 @@ public class MainActivity extends Activity {
     private void exitPseudoFs() {
         if (!pseudoFs) return;
         pseudoFs = false;
-        js("window.__gtFS&&window.__gtFS(false)");
+        web.evaluateJavascript("window.__gtFS&&window.__gtFS(false)", null);
         gear.setVisibility(customView == null ? View.VISIBLE : View.GONE);
         swipe.setEnabled(true);
         goImmersive(false);
@@ -434,15 +465,176 @@ public class MainActivity extends Activity {
     @Override public void onBackPressed() {
         if (customView != null) exitFullscreen();
         else if (pseudoFs) exitPseudoFs();
-        else if (web.canGoBack()) web.goBack();
+        else if (on("mini") && watching()) backFromWatch();
+        else defaultBack();
+    }
+
+    private void defaultBack() {
+        if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }
 
+    // ---------- mini player dentro do app ----------
+    /** Voltar na tela de vídeo: se está tocando, o vídeo vira um mini player e o app volta pra página anterior. */
+    private void backFromWatch() {
+        web.evaluateJavascript("(function(){var v=document.querySelector('video');if(!v)return '';"
+                + "var pl=!v.paused&&!v.ended;var t=Math.floor(v.currentTime||0);"
+                + "if(pl)v.pause();return JSON.stringify([location.href,t,pl]);})()", value -> {
+            String url = null; int sec = 0; boolean pl = false;
+            try {
+                Object o = new JSONTokener(value == null ? "\"\"" : value).nextValue();
+                if (o instanceof String) {
+                    JSONArray a = new JSONArray((String) o);
+                    url = a.getString(0); sec = a.getInt(1); pl = a.getBoolean(2);
+                }
+            } catch (Exception ignored) {}
+            if (pl && url != null && url.contains("/watch")) {
+                openMini(url, sec);
+                String prev = previousUrl();
+                // sem página anterior (ou anterior também é vídeo): vai pra home, o mini continua tocando
+                if (prev == null || prev.contains("/watch")) web.loadUrl(HOME);
+                else web.goBack();
+            } else {
+                defaultBack();
+            }
+        });
+    }
+
+    private String previousUrl() {
+        WebBackForwardList l = web.copyBackForwardList();
+        int i = l.getCurrentIndex();
+        return i > 0 ? l.getItemAtIndex(i - 1).getUrl() : null;
+    }
+
+    private static String withTime(String url, int sec) {
+        Uri u = Uri.parse(url);
+        Uri.Builder b = u.buildUpon().clearQuery();
+        for (String k : u.getQueryParameterNames()) {
+            if (k.equals("t") || k.equals("start")) continue;
+            for (String v : u.getQueryParameters(k)) b.appendQueryParameter(k, v);
+        }
+        if (sec > 0) b.appendQueryParameter("t", sec + "s");
+        return b.build().toString();
+    }
+
+    private static boolean ytHost(String h) {
+        return h.endsWith("youtube.com") || h.endsWith("google.com") || h.endsWith("gstatic.com")
+                || h.endsWith("googleusercontent.com") || h.endsWith("googleapis.com") || h.equals("youtu.be");
+    }
+
+    private void openMini(String url, int sec) {
+        closeMini(false);
+        final float d = getResources().getDisplayMetrics().density;
+        final String ms = cfgJs(true) + injectJs;
+        miniGraceUntil = System.currentTimeMillis() + 2500;
+
+        final WebView mw = new WebView(this);
+        miniWeb = mw;
+        WebSettings s = mw.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setUserAgentString(UA);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(mw, true);
+        mw.addJavascriptInterface(new Bridge(true), "GT");
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(mw, ms,
+                    new HashSet<>(Arrays.asList("https://m.youtube.com", "https://www.youtube.com")));
+        }
+        mw.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                if (on("ads") && isAd(r.getUrl())) {
+                    return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+                }
+                return null;
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                String h = r.getUrl().getHost() == null ? "" : r.getUrl().getHost();
+                return !ytHost(h);
+            }
+            @Override public void onPageStarted(WebView v, String u, Bitmap f) { v.evaluateJavascript(ms, null); }
+            @Override public void onPageFinished(WebView v, String u) { v.evaluateJavascript(ms, null); }
+        });
+        mw.setWebChromeClient(new WebChromeClient());
+
+        final FrameLayout box = new FrameLayout(this);
+        miniBox = box;
+        box.setBackgroundColor(Color.BLACK);
+        box.setElevation(10 * d);
+        final float r = 10 * d;
+        box.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), r); }
+        });
+        box.setClipToOutline(true);
+        box.addView(mw, new FrameLayout.LayoutParams(-1, -1));
+
+        // toque no mini player = maximiza
+        View tap = new View(this);
+        tap.setOnClickListener(v -> maximizeMini());
+        box.addView(tap, new FrameLayout.LayoutParams(-1, -1));
+
+        // X = fecha
+        ImageButton x = new ImageButton(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(0xB3000000);
+        x.setBackground(bg);
+        x.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
+        x.setColorFilter(Color.WHITE);
+        x.setPadding((int) (5 * d), (int) (5 * d), (int) (5 * d), (int) (5 * d));
+        x.setOnClickListener(v -> closeMini(true));
+        FrameLayout.LayoutParams xl = new FrameLayout.LayoutParams((int) (28 * d), (int) (28 * d), Gravity.TOP | Gravity.END);
+        xl.setMargins(0, (int) (4 * d), (int) (4 * d), 0);
+        box.addView(x, xl);
+
+        // fica acima da barra de baixo do YouTube
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (224 * d), (int) (126 * d), Gravity.BOTTOM | Gravity.END);
+        lp.setMargins(0, 0, (int) (8 * d), (int) (64 * d));
+        root.addView(box, lp);
+
+        mw.loadUrl(withTime(url, sec));
+    }
+
+    private void maximizeMini() {
+        if (miniWeb == null) return;
+        miniWeb.evaluateJavascript("(function(){var v=document.querySelector('video');"
+                + "return JSON.stringify([location.href,v?Math.floor(v.currentTime||0):0]);})()", value -> {
+            if (miniWeb == null) return;
+            String url = null; int sec = 0;
+            try {
+                Object o = new JSONTokener(value == null ? "\"\"" : value).nextValue();
+                if (o instanceof String) {
+                    JSONArray a = new JSONArray((String) o);
+                    url = a.getString(0); sec = a.getInt(1);
+                }
+            } catch (Exception ignored) {}
+            if (url == null) return;
+            closeMini(false);
+            web.loadUrl(withTime(url, sec));
+        });
+    }
+
+    private void closeMini(boolean resetNotification) {
+        if (miniWeb == null) return;
+        WebView mw = miniWeb;
+        FrameLayout box = miniBox;
+        miniWeb = null; miniBox = null;
+        if (box != null) { box.removeAllViews(); root.removeView(box); }
+        try { mw.loadUrl("about:blank"); } catch (Exception ignored) {}
+        mw.destroy();
+        if (resetNotification) {
+            playing = false;
+            if (KeepAliveService.instance != null) KeepAliveService.instance.update("DevTube", false);
+        }
+    }
+
     // Propositalmente NÃO chamamos web.onPause(): assim o áudio segue tocando em segundo plano.
-    @Override protected void onResume() { super.onResume(); web.onResume(); }
+    @Override protected void onResume() { super.onResume(); web.onResume(); if (miniWeb != null) miniWeb.onResume(); }
 
     @Override protected void onDestroy() {
         instance = null;
+        closeMini(false);
         stopService(new Intent(this, KeepAliveService.class));
         CookieManager.getInstance().flush();
         ((ViewGroup) web.getParent()).removeView(web);
