@@ -169,11 +169,31 @@ try{
 /* ---------- Mini player (WebView secundária do app): só o vídeo, sem controles ---------- */
 if(window.__gtMini){
   window.__gtGuard=true;
+  addCss('gt-mini','ytm-mobile-topbar-renderer,header.mobile-topbar-header{display:none!important}'
+    +'html,body{overflow:hidden!important;background:#000!important}');
+  var lastFit=0;
   setInterval(function(){
     try{
-      var pl=document.querySelector('.html5-video-player')||document.querySelector('#movie_player');
-      if(pl&&getComputedStyle(pl).position!=='fixed') window.__gtFS(true,true);
+      /* tela preta por trás: nada da página vaza na janelinha */
+      if(!document.getElementById('gt-mcover')&&document.documentElement){
+        var c=document.createElement('div'); c.id='gt-mcover';
+        c.style.cssText='position:fixed;top:0;left:0;width:100vw;height:100vh;background:#000;z-index:2147483640;pointer-events:none';
+        document.documentElement.appendChild(c);
+      }
       var v=document.querySelector('video');
+      var pl=document.querySelector('.html5-video-player')||document.querySelector('#movie_player');
+      if(pl&&v){
+        /* o vídeo precisa ocupar a janelinha toda; se o site reorganizou a página, aplica de novo */
+        var r=v.getBoundingClientRect(),now=Date.now();
+        if((Math.abs(r.width-innerWidth)>3||Math.abs(r.height-innerHeight)>3)&&now-lastFit>700){
+          lastFit=now; window.__gtFS(true,true);
+        }
+        /* o site inicia o vídeo mudo (autoplay): tira o mudo (fora de anúncio) */
+        if(!adShowing()&&(v.muted||v.volume===0)){
+          try{ if(pl.unMute) pl.unMute(); if(pl.setVolume) pl.setVolume(100); }catch(e){}
+          v.muted=false; if(v.volume===0) v.volume=1;
+        }
+      }
       if(v&&!v.__gtP&&v.paused&&!v.ended){ v.__gtP=1; var pr=v.play(); if(pr&&pr.catch) pr.catch(function(){}); }
     }catch(e){}
   },300);
