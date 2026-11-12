@@ -1,6 +1,6 @@
 (function(){
 if(window.__gt)return;window.__gt=1;
-var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,notop:true,speed:1};
+var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,notop:true,qc:true,speed:1};
 
 /* Mantém a página "visível": o vídeo não pausa em segundo plano */
 try{
@@ -87,6 +87,10 @@ function css(){
 }
 css();
 document.addEventListener('DOMContentLoaded',css);
+/* quadro do player sempre preto (em vez do cinza que aparece na troca de vídeo) */
+addCss('gt-black','.html5-video-player,.html5-video-container,#player-container-id,.player-container,#player,'
+  +'ytm-custom-control,.player-placeholder,ytm-player-placeholder,.ytp-cued-thumbnail-overlay,'
+  +'.ytp-cued-thumbnail-overlay-image{background-color:#000!important}');
 
 /* ---------- Esconde a barra do topo (logo YouTube + lupa) na tela de vídeo ---------- */
 addCss('gt-notop',[
@@ -150,9 +154,12 @@ window.__gtFS=function(on,pip){
     s.textContent='html,body{overflow:hidden!important;background:#000!important}'
       +'.gt-fsanc{transform:none!important;contain:none!important;filter:none!important;overflow:visible!important;z-index:2147483646!important}'
       +'.html5-video-player,#movie_player{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;'
-      +'z-index:2147483647!important;background:#000!important;margin:0!important}'
+      +'z-index:2147483646!important;background:#000!important;margin:0!important}'
       +'.html5-video-player .html5-video-container,#movie_player .html5-video-container{position:absolute!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important}'
       +'.html5-video-player video,#movie_player video{position:absolute!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;transform:none!important;object-fit:contain!important;background:#000!important}';
+    if(!pip) s.textContent+='#player-control-overlay{position:fixed!important;top:0!important;left:0!important;'
+      +'width:100vw!important;height:100vh!important;margin:0!important;z-index:2147483647!important}'
+      +'#player-control-overlay .player-controls-content{z-index:2147483647!important}';
     if(pip) s.textContent+='.player-controls-top,.player-controls-middle,.player-controls-bottom,.player-controls-background,'
       +'.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay{display:none!important}';
     document.documentElement.appendChild(s);
@@ -240,6 +247,114 @@ function vid(){
   return new URLSearchParams(location.search).get('v')||'';
 }
 
+/* ---------- Atalhos rápidos no player: legendas, qualidade, velocidade ---------- */
+var QL={highres:'4320p',hd2880:'2880p',hd2160:'2160p',hd1440:'1440p',hd1080:'1080p',hd720:'720p',
+        large:'480p',medium:'360p',small:'240p',tiny:'144p',auto:'Auto'};
+var SPD=[0.5,0.75,1,1.25,1.5,1.75,2];
+function mp(){ return document.querySelector('#movie_player')||document.querySelector('.html5-video-player'); }
+var qcBar=null,qcMenu=null,qcQ=null,qcS=null;
+function qcClose(){ if(qcMenu) qcMenu.style.display='none'; }
+function qcToast(t){
+  var e=document.createElement('div'); e.textContent=t;
+  e.style.cssText='position:fixed;left:50%;bottom:18%;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;'
+    +'font:600 13px Roboto,Arial,sans-serif;padding:8px 14px;border-radius:16px;z-index:2147483647;pointer-events:none';
+  document.documentElement.appendChild(e); setTimeout(function(){ e.remove(); },1800);
+}
+function qcOpen(items){
+  qcMenu.innerHTML='';
+  items.forEach(function(it){
+    var d=document.createElement('div');
+    d.textContent=(it.active?'\u2713 ':'    ')+it.label;
+    d.style.cssText='padding:9px 16px;white-space:nowrap;'+(it.active?'color:#ff4e45;':'');
+    d.addEventListener('click',function(ev){ ev.stopPropagation(); qcClose(); try{ it.fn(); }catch(e){} qcLabels(); });
+    qcMenu.appendChild(d);
+  });
+  qcMenu.style.display='block';
+}
+function qcChip(txt,fn){
+  var c=document.createElement('div'); c.textContent=txt;
+  c.style.cssText='background:rgba(0,0,0,.62);padding:7px 11px;border-radius:15px;opacity:.78';
+  c.addEventListener('click',function(ev){
+    ev.stopPropagation();
+    if(qcMenu.style.display==='block'){ qcClose(); return; }
+    fn();
+  });
+  return c;
+}
+function qcCaptions(){
+  var p=mp(); if(!p) return;
+  try{ if(p.loadModule) p.loadModule('captions'); }catch(e){}
+  setTimeout(function(){
+    var tl=null; try{ tl=p.getOption&&p.getOption('captions','tracklist'); }catch(e){}
+    if(!tl||!tl.length){
+      var b=document.querySelector('button[aria-label*="egenda" i],button[aria-label*="aption" i],button[aria-label*="ubtitle" i]');
+      if(b){ b.click(); } else qcToast('Sem legendas neste vídeo');
+      return;
+    }
+    var cur=null; try{ cur=p.getOption('captions','track'); }catch(e){}
+    var on=!!(cur&&cur.languageCode);
+    var items=[{label:'Desativadas',active:!on,fn:function(){ try{ p.setOption('captions','track',{}); p.unloadModule('captions'); }catch(e){} }}];
+    tl.forEach(function(t){
+      items.push({label:t.displayName||t.languageName||t.languageCode,active:on&&cur.languageCode===t.languageCode,
+        fn:function(){ p.loadModule('captions'); p.setOption('captions','track',{languageCode:t.languageCode}); }});
+    });
+    qcOpen(items);
+  },280);
+}
+function qcQuality(){
+  var p=mp(); if(!p||!p.getAvailableQualityLevels){ qcToast('Qualidade indisponível'); return; }
+  var lv=p.getAvailableQualityLevels()||[], cur=p.getPlaybackQuality?p.getPlaybackQuality():'';
+  var items=[{label:'Auto',active:false,fn:function(){
+    try{ p.setPlaybackQualityRange('tiny','highres'); p.setPlaybackQuality('auto'); }catch(e){} }}];
+  lv.forEach(function(q){
+    if(q==='auto') return;
+    items.push({label:QL[q]||q,active:q===cur,fn:function(){
+      try{ if(p.setPlaybackQualityRange) p.setPlaybackQualityRange(q,q); if(p.setPlaybackQuality) p.setPlaybackQuality(q); }catch(e){}
+      qcToast('Qualidade: '+(QL[q]||q)); }});
+  });
+  qcOpen(items);
+}
+function qcSpeed(){
+  var v=document.querySelector('video'); if(!v) return;
+  qcOpen(SPD.map(function(x){
+    return {label:(x===1?'Normal (1x)':x+'x'),active:Math.abs(v.playbackRate-x)<0.01,fn:function(){ v.playbackRate=x; }};
+  }));
+}
+function qcLabels(){
+  try{
+    var p=mp(),v=document.querySelector('video');
+    if(qcQ){ var q=p&&p.getPlaybackQuality?p.getPlaybackQuality():''; qcQ.textContent=QL[q]||'Qualidade'; }
+    if(qcS&&v) qcS.textContent=(Math.round(v.playbackRate*100)/100)+'x';
+  }catch(e){}
+}
+function qcBuild(){
+  qcBar=document.createElement('div'); qcBar.id='gt-qc';
+  qcBar.style.cssText='position:fixed;z-index:2147483647;display:none;font:600 12px Roboto,Arial,sans-serif;color:#fff;'
+    +'-webkit-tap-highlight-color:transparent;user-select:none';
+  var row=document.createElement('div'); row.style.cssText='display:flex;gap:6px';
+  qcMenu=document.createElement('div');
+  qcMenu.style.cssText='display:none;margin-top:6px;background:rgba(20,20,20,.96);border-radius:10px;padding:4px 0;'
+    +'max-height:calc(100vh - 80px);overflow-y:auto;min-width:130px;font-size:14px';
+  var cc=qcChip('CC',qcCaptions); qcQ=qcChip('Qualidade',qcQuality); qcS=qcChip('1x',qcSpeed);
+  row.appendChild(cc); row.appendChild(qcQ); row.appendChild(qcS);
+  qcBar.appendChild(row); qcBar.appendChild(qcMenu);
+  document.documentElement.appendChild(qcBar);
+  document.addEventListener('touchstart',function(e){ if(qcBar&&!qcBar.contains(e.target)) qcClose(); },true);
+}
+var qcTick=0;
+function qcUpdate(){
+  var v=document.querySelector('video');
+  var show=cfg.qc&&!window.__gtMini&&!window.__gtGuard&&location.pathname==='/watch'&&v&&!adShowing();
+  if(!show){ if(qcBar){ qcBar.style.display='none'; qcClose(); } return; }
+  if(!qcBar) qcBuild();
+  var r=v.getBoundingClientRect();
+  if(r.width<80||r.bottom<40||r.top>innerHeight-40){ qcBar.style.display='none'; qcClose(); return; }
+  qcBar.style.display='block';
+  qcBar.style.left=Math.max(r.left,0)+8+'px';
+  qcBar.style.top=Math.max(r.top,0)+8+'px';
+  if(++qcTick%4===0) qcLabels();
+}
+
 setInterval(function(){
   try{
     /* Shorts abrem no player normal; esconde a aba Shorts */
@@ -250,6 +365,7 @@ setInterval(function(){
       for(var k=0;k<it.length;k++){ if(/^\s*shorts\s*$/i.test(it[k].textContent)) it[k].style.display='none'; }
     }
     updateTop();
+    qcUpdate();
     /* mudou de vídeo */
     var id=vid();
     if(id!==curVid){

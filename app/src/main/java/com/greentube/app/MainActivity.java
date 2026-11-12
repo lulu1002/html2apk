@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
     private String cfgJs(boolean mini) {
         return (mini ? "window.__gtMini=true;" : "")
                 + "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
-                + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop")
+                + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop") + ",qc:" + on("qc")
                 + ",speed:" + prefs.getFloat("speed", 1f) + "};";
     }
 
@@ -140,8 +140,9 @@ public class MainActivity extends Activity {
         final String[] names = {"Bloquear anúncios", "Esconder Shorts", "SponsorBlock (pular patrocínios)",
                 "Contador de dislikes", "Picture-in-picture ao sair do app",
                 "Tela cheia automática ao girar o celular",
-                "Esconder barra do topo (logo e lupa) no vídeo", "Mini player dentro do app ao voltar do vídeo"};
-        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs", "notop", "mini"};
+                "Esconder barra do topo (logo e lupa) no vídeo", "Mini player dentro do app ao voltar do vídeo",
+                "Atalhos rápidos no player (legendas, qualidade, velocidade)"};
+        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs", "notop", "mini", "qc"};
         final boolean[] st = new boolean[keys.length];
         for (int i = 0; i < keys.length; i++) st[i] = on(keys[i]);
         new AlertDialog.Builder(this)
