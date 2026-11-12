@@ -19,7 +19,8 @@ public class KeepAliveService extends Service {
     static final String CH = "greentube_bg";
     static KeepAliveService instance;
 
-    static final String JS_TOGGLE = "var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}";
+    static final String USER_PAUSE = "window.__gtUser=true;v.pause();setTimeout(function(){window.__gtUser=false},500);";
+    static final String JS_TOGGLE = "var v=document.querySelector('video');if(v){if(v.paused)v.play();else{" + USER_PAUSE + "}}";
     static final String JS_FF = "var v=document.querySelector('video');if(v)v.currentTime+=10;";
     static final String JS_RW = "var v=document.querySelector('video');if(v)v.currentTime-=10;";
 
@@ -46,7 +47,7 @@ public class KeepAliveService extends Service {
     }
 
     private static String JS_TOGGLE_PLAY(boolean play) {
-        return "var v=document.querySelector('video');if(v){" + (play ? "v.play()" : "v.pause()") + ";}";
+        return "var v=document.querySelector('video');if(v){" + (play ? "v.play();" : USER_PAUSE) + "}";
     }
 
     private PendingIntent act(String a) {

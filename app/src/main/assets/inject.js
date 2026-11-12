@@ -8,7 +8,28 @@ try{
   Object.defineProperty(document,'visibilityState',{get:function(){return 'visible'}});
   document.addEventListener('visibilitychange',function(e){e.stopImmediatePropagation()},true);
   window.addEventListener('blur',function(e){e.stopImmediatePropagation()},true);
+  Object.defineProperty(document,'webkitHidden',{get:function(){return false}});
+  Object.defineProperty(document,'webkitVisibilityState',{get:function(){return 'visible'}});
+  document.hasFocus=function(){return true};
 }catch(e){}
+
+/* Anti-pausa: dentro do picture-in-picture (window.__gtGuard) o vídeo só pausa se o usuário pedir
+   (botão da janelinha/notificação marca window.__gtUser). Qualquer outra pausa é desfeita. */
+window.__gtGuard=false; window.__gtUser=false;
+(function(){
+  var op=HTMLMediaElement.prototype.pause;
+  HTMLMediaElement.prototype.pause=function(){
+    if(window.__gtGuard&&!window.__gtUser) return;
+    return op.apply(this,arguments);
+  };
+  var redo=0,t0=0;
+  document.addEventListener('pause',function(e){
+    var v=e.target;
+    if(!window.__gtGuard||window.__gtUser||!v||v.ended||v.tagName!=='VIDEO') return;
+    var now=Date.now(); if(now-t0>3000){ redo=0; t0=now; }
+    if(redo++<4) setTimeout(function(){ if(window.__gtGuard&&!window.__gtUser&&v.paused&&!v.ended) v.play(); },60);
+  },true);
+})();
 
 /* ---------- Anúncios: remove dados de anúncio das respostas do player ---------- */
 if(cfg.ads){

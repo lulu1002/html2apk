@@ -358,10 +358,9 @@ public class MainActivity extends Activity {
         swipe.setEnabled(!inPip && !pseudoFs);
         if (inPip) {
             // o vídeo ocupa a janelinha toda (mesmo método da tela cheia própria, sem controles)
-            js("window.__gtFS&&window.__gtFS(true,true)");
-            web.postDelayed(() -> js("var v=document.querySelector('video');if(v&&v.paused)v.play();"), 400);
+            js("window.__gtGuard=true;window.__gtFS&&window.__gtFS(true,true)");
         } else {
-            js("window.__gtFS&&window.__gtFS(" + pseudoFs + ",false)");
+            js("window.__gtGuard=false;window.__gtFS&&window.__gtFS(" + pseudoFs + ",false)");
         }
         if (!inPip) {
             final boolean land = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
