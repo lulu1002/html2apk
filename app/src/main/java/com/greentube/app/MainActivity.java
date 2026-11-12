@@ -342,10 +342,13 @@ public class MainActivity extends Activity {
         super.onUserLeaveHint();
         boolean watching = customView != null || (web.getUrl() != null && web.getUrl().contains("/watch"));
         if (on("pip") && playing && watching) {
+            gear.setVisibility(View.GONE); // some da janelinha antes de a transição começar
             try {
                 enterPictureInPictureMode(new PictureInPictureParams.Builder()
                         .setAspectRatio(new Rational(16, 9)).build());
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                if (!pseudoFs && customView == null) gear.setVisibility(View.VISIBLE);
+            }
         }
     }
 
@@ -353,7 +356,13 @@ public class MainActivity extends Activity {
         super.onPictureInPictureModeChanged(inPip, c);
         gear.setVisibility(inPip || customView != null || pseudoFs ? View.GONE : View.VISIBLE);
         swipe.setEnabled(!inPip && !pseudoFs);
-        js("window.__gtPip&&window.__gtPip(" + inPip + ")");
+        if (inPip) {
+            // o vídeo ocupa a janelinha toda (mesmo método da tela cheia própria, sem controles)
+            js("window.__gtFS&&window.__gtFS(true,true)");
+            web.postDelayed(() -> js("var v=document.querySelector('video');if(v&&v.paused)v.play();"), 400);
+        } else {
+            js("window.__gtFS&&window.__gtFS(" + pseudoFs + ",false)");
+        }
         if (!inPip) {
             final boolean land = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
             web.postDelayed(() -> handleOrientation(land), 300);

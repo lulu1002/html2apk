@@ -80,7 +80,7 @@ window.__gtPip=function(on){
 };
 
 /* ---------- Tela cheia própria (ao girar o celular) ---------- */
-window.__gtFS=function(on){
+window.__gtFS=function(on,pip){
   var old=document.getElementById('gt-fs'); if(old) old.remove();
   var prev=document.querySelectorAll('.gt-fsanc');
   for(var i=0;i<prev.length;i++) prev[i].classList.remove('gt-fsanc');
@@ -93,7 +93,10 @@ window.__gtFS=function(on){
       +'.gt-fsanc{transform:none!important;contain:none!important;filter:none!important;overflow:visible!important;z-index:2147483646!important}'
       +'.html5-video-player,#movie_player{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;'
       +'z-index:2147483647!important;background:#000!important;margin:0!important}'
-      +'.html5-video-player video,#movie_player video{width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important}';
+      +'.html5-video-player .html5-video-container,#movie_player .html5-video-container{position:absolute!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important}'
+      +'.html5-video-player video,#movie_player video{position:absolute!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;transform:none!important;object-fit:contain!important;background:#000!important}';
+    if(pip) s.textContent+='.player-controls-top,.player-controls-middle,.player-controls-bottom,.player-controls-background,'
+      +'.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay{display:none!important}';
     document.documentElement.appendChild(s);
   }
   setTimeout(function(){ window.dispatchEvent(new Event('resize')); },60);
