@@ -13,11 +13,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.SystemClock;
 import android.util.Rational;
 import android.view.Gravity;
-import android.view.InputDevice;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -78,16 +75,7 @@ public class MainActivity extends Activity {
     private String injectJs = "";
     private String script = "";
     private volatile boolean playing = false;
-    private boolean pendingAuto = false;   // fomos nós que pedimos a tela cheia automática
-    private boolean autoEntered = false;   // a tela cheia atual foi aberta automaticamente
-
-    // Acha o botão de tela cheia do player e devolve o centro dele (px CSS), ou vazio.
-    private static final String FS_JS = "(function(){window.scrollTo(0,0);"
-            + "var b=document.querySelector('.fullscreen-icon,.ytp-fullscreen-button,"
-            + "button[aria-label*=\"ull\" i],button[aria-label*=\"heia\" i]');"
-            + "if(!b)return '';var r=b.getBoundingClientRect();"
-            + "if(r.width<=0||r.height<=0||r.bottom>window.innerHeight||r.right>window.innerWidth)return '';"
-            + "return Math.round(r.left+r.width/2)+','+Math.round(r.top+r.height/2);})()";
+    private boolean pseudoFs = false;      // tela cheia automática (própria) ativa
 
     /** Executa JS na página a partir de qualquer thread (usado pela notificação de mídia). */
     static void js(final String code) {
@@ -200,6 +188,10 @@ public class MainActivity extends Activity {
                 if (KeepAliveService.instance != null)
                     KeepAliveService.instance.update(title == null ? "DevTube" : title, pl);
             });
+        }
+
+        @JavascriptInterface public void orient(final boolean landscape) {
+            runOnUiThread(() -> handleOrientation(landscape));
         }
 
         @JavascriptInterface public void sponsor(final String id) {
@@ -322,7 +314,7 @@ public class MainActivity extends Activity {
             @Override public void onShowCustomView(View view, CustomViewCallback cb) {
                 if (customView != null) { cb.onCustomViewHidden(); return; }
                 customView = view; customCb = cb;
-                autoEntered = pendingAuto; pendingAuto = false;
+                if (pseudoFs) exitPseudoFs();
                 swipe.setVisibility(View.GONE);
                 gear.setVisibility(View.GONE);
                 root.addView(view, new FrameLayout.LayoutParams(-1, -1));
@@ -359,9 +351,13 @@ public class MainActivity extends Activity {
 
     @Override public void onPictureInPictureModeChanged(boolean inPip, Configuration c) {
         super.onPictureInPictureModeChanged(inPip, c);
-        gear.setVisibility(inPip || customView != null ? View.GONE : View.VISIBLE);
-        swipe.setEnabled(!inPip);
+        gear.setVisibility(inPip || customView != null || pseudoFs ? View.GONE : View.VISIBLE);
+        swipe.setEnabled(!inPip && !pseudoFs);
         js("window.__gtPip&&window.__gtPip(" + inPip + ")");
+        if (!inPip) {
+            final boolean land = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+            web.postDelayed(() -> handleOrientation(land), 300);
+        }
     }
 
     // ---------- tela cheia automática ao girar ----------
@@ -369,48 +365,38 @@ public class MainActivity extends Activity {
         return web.getUrl() != null && web.getUrl().contains("/watch");
     }
 
-    @Override public void onConfigurationChanged(Configuration c) {
-        super.onConfigurationChanged(c);
-        if (isInPictureInPictureMode() || !on("autofs")) return;
-        if (c.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            if (customView == null && watching()) web.postDelayed(() -> autoFullscreen(1), 600);
-        } else if (c.orientation == Configuration.ORIENTATION_PORTRAIT) {
-            pendingAuto = false;
-            if (customView != null && autoEntered) exitFullscreen(); // voltou ao retrato: sai da tela cheia
+    /** Chamado quando o celular gira (pelo Android e também pela própria página). É idempotente. */
+    private void handleOrientation(boolean landscape) {
+        if (!on("autofs") || isInPictureInPictureMode()) return;
+        if (landscape) {
+            if (!pseudoFs && customView == null && watching()) enterPseudoFs();
+        } else {
+            if (pseudoFs) exitPseudoFs();
         }
     }
 
-    /** Toca de verdade no botão de tela cheia (o navegador só aceita tela cheia após um toque real). */
-    private void autoFullscreen(final int attempt) {
-        if (customView != null || !watching() || isInPictureInPictureMode()) return;
-        if (getResources().getConfiguration().orientation != Configuration.ORIENTATION_LANDSCAPE) return;
-        pendingAuto = true;
-        web.evaluateJavascript(FS_JS, v -> {
-            String r = v == null ? "" : v.replace("\"", "");
-            if (r.contains(",")) {
-                try {
-                    String[] p = r.split(",");
-                    float d = getResources().getDisplayMetrics().density;
-                    tap(Float.parseFloat(p[0]) * d, Float.parseFloat(p[1]) * d);
-                } catch (Exception ignored) {}
-            }
-            if (attempt < 3) web.postDelayed(() -> { if (customView == null) autoFullscreen(attempt + 1); }, 900);
-            else pendingAuto = false;
-        });
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        final boolean land = c.orientation == Configuration.ORIENTATION_LANDSCAPE;
+        web.postDelayed(() -> handleOrientation(land), 250);
     }
 
-    private void tap(final float x, final float y) {
-        final long t = SystemClock.uptimeMillis();
-        MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0);
-        down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        web.dispatchTouchEvent(down);
-        down.recycle();
-        web.postDelayed(() -> {
-            MotionEvent up = MotionEvent.obtain(t, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0);
-            up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-            web.dispatchTouchEvent(up);
-            up.recycle();
-        }, 60);
+    /** Tela cheia própria: o player ocupa a tela toda e as barras do sistema somem (sem precisar de toque). */
+    private void enterPseudoFs() {
+        pseudoFs = true;
+        js("window.__gtFS&&window.__gtFS(true)");
+        gear.setVisibility(View.GONE);
+        swipe.setEnabled(false);
+        goImmersive(true);
+    }
+
+    private void exitPseudoFs() {
+        if (!pseudoFs) return;
+        pseudoFs = false;
+        js("window.__gtFS&&window.__gtFS(false)");
+        gear.setVisibility(customView == null ? View.VISIBLE : View.GONE);
+        swipe.setEnabled(true);
+        goImmersive(false);
     }
 
     // ---------- tela cheia ----------
@@ -418,7 +404,6 @@ public class MainActivity extends Activity {
         if (customView == null) return;
         root.removeView(customView);
         customView = null;
-        autoEntered = false;
         if (customCb != null) customCb.onCustomViewHidden();
         swipe.setVisibility(View.VISIBLE);
         gear.setVisibility(View.VISIBLE);
@@ -426,6 +411,12 @@ public class MainActivity extends Activity {
     }
 
     private void goImmersive(boolean on) {
+        if (Build.VERSION.SDK_INT >= 28) {
+            getWindow().getAttributes().layoutInDisplayCutoutMode = on
+                    ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+            getWindow().setAttributes(getWindow().getAttributes());
+        }
         getWindow().getDecorView().setSystemUiVisibility(on
             ? View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
               | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -434,6 +425,7 @@ public class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (customView != null) exitFullscreen();
+        else if (pseudoFs) exitPseudoFs();
         else if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }

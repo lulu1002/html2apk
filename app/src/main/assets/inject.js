@@ -79,6 +79,32 @@ window.__gtPip=function(on){
   }
 };
 
+/* ---------- Tela cheia própria (ao girar o celular) ---------- */
+window.__gtFS=function(on){
+  var old=document.getElementById('gt-fs'); if(old) old.remove();
+  var prev=document.querySelectorAll('.gt-fsanc');
+  for(var i=0;i<prev.length;i++) prev[i].classList.remove('gt-fsanc');
+  var pl=document.querySelector('.html5-video-player')||document.querySelector('#movie_player');
+  if(on&&pl){
+    var e=pl.parentElement;
+    while(e&&e!==document.documentElement){ e.classList.add('gt-fsanc'); e=e.parentElement; }
+    var s=document.createElement('style'); s.id='gt-fs';
+    s.textContent='html,body{overflow:hidden!important;background:#000!important}'
+      +'.gt-fsanc{transform:none!important;contain:none!important;filter:none!important;overflow:visible!important;z-index:2147483646!important}'
+      +'.html5-video-player,#movie_player{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;'
+      +'z-index:2147483647!important;background:#000!important;margin:0!important}'
+      +'.html5-video-player video,#movie_player video{width:100%!important;height:100%!important;left:0!important;top:0!important;object-fit:contain!important}';
+    document.documentElement.appendChild(s);
+  }
+  setTimeout(function(){ window.dispatchEvent(new Event('resize')); },60);
+  setTimeout(function(){ window.dispatchEvent(new Event('resize')); },400);
+};
+try{
+  var mq=window.matchMedia('(orientation: landscape)');
+  var oc=function(e){ if(window.GT) GT.orient(e.matches); };
+  if(mq.addEventListener) mq.addEventListener('change',oc); else mq.addListener(oc);
+}catch(e){}
+
 /* ---------- Dislikes (Return YouTube Dislike, via app) ---------- */
 var curVid='',segs=[],dis=null;
 function fmt(n){ try{return new Intl.NumberFormat('en',{notation:'compact'}).format(n);}catch(e){return ''+n;} }
