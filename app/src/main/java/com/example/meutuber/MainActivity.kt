@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
 fun Root(onVideo: (Boolean) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val web = remember { newYouTubeWebView(ctx) }
     var tab by remember { mutableIntStateOf(0) }
     var home by remember { mutableStateOf<List<Entry>>(emptyList()) }
     var found by remember { mutableStateOf<List<Entry>>(emptyList()) }
@@ -91,6 +92,7 @@ fun Root(onVideo: (Boolean) -> Unit) {
     fun loadHome() = io { home = withContext(Dispatchers.IO) { homeFeed() } }
     LaunchedEffect(Unit) { loadHome() }
     BackHandler(enabled = channel != null) { channel = null }
+    BackHandler(enabled = tab == 3) { if (web.canGoBack()) web.goBack() else tab = 0 }
 
     // Pula automaticamente trechos de patrocínio/autopromoção (SponsorBlock)
     LaunchedEffect(current?.e?.url) {
@@ -110,13 +112,17 @@ fun Root(onVideo: (Boolean) -> Unit) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                listOf("🏠 Início", "🔍 Buscar", "📚 Biblioteca").forEachIndexed { i, t ->
+                listOf("🏠 Início", "🔍 Buscar", "📚 Biblioteca", "▶ YouTube").forEachIndexed { i, t ->
                     NavigationBarItem(selected = tab == i, onClick = { if (i == 0 && tab == 0) loadHome(); tab = i; channel = null },
                         icon = { Text(t.substringBefore(' ')) }, label = { Text(t.substringAfter(' ')) })
                 }
             }
         }
     ) { pad ->
+        if (tab == 3) {
+            YouTubeWeb(web, Modifier.padding(pad).fillMaxSize().statusBarsPadding())
+            return@Scaffold
+        }
         Column(Modifier.padding(pad).fillMaxSize().statusBarsPadding()) {
             current?.let { r ->
                 AndroidView(
