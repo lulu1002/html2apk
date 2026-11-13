@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Rational;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
@@ -30,6 +31,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import androidx.webkit.ScriptHandler;
@@ -83,6 +87,9 @@ public class MainActivity extends Activity {
     private WebView miniWeb;               // mini player: segunda WebView só com o vídeo
     private FrameLayout miniBox;
     private long miniGraceUntil = 0;
+    private LinearLayout qcBar;            // atalhos rápidos (CC / qualidade / velocidade), nativos
+    private TextView qcQ, qcS;
+    private final Runnable qcHide = () -> { if (qcBar != null) qcBar.setVisibility(View.GONE); };
 
     /** Executa JS na página a partir de qualquer thread (usado pela notificação de mídia). */
     static void js(final String code) {
@@ -292,6 +299,18 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px, px, Gravity.END | Gravity.CENTER_VERTICAL);
         lp.setMargins(0, 0, (int) (4 * d), 0);
         root.addView(gear, lp);
+
+        qcBar = new LinearLayout(this);
+        qcBar.setOrientation(LinearLayout.HORIZONTAL);
+        qcBar.setVisibility(View.GONE);
+        qcBar.addView(qcChip("CC", v -> qcCaptions()));
+        qcQ = qcChip("Qualidade", v -> qcQuality());
+        qcBar.addView(qcQ);
+        qcS = qcChip("1x", v -> qcSpeed());
+        qcBar.addView(qcS);
+        FrameLayout.LayoutParams ql = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        ql.setMargins((int) (12 * d), (int) (12 * d), 0, 0);
+        root.addView(qcBar, ql);
         setContentView(root);
 
         WebSettings s = web.getSettings();
@@ -349,7 +368,9 @@ public class MainActivity extends Activity {
                 swipe.setVisibility(View.GONE);
                 gear.setVisibility(View.GONE);
                 root.addView(view, new FrameLayout.LayoutParams(-1, -1));
+                qcBar.bringToFront();
                 goImmersive(true);
+                showQc();
             }
             @Override public void onHideCustomView() { exitFullscreen(); }
         });
@@ -374,6 +395,7 @@ public class MainActivity extends Activity {
         boolean watching = customView != null || (web.getUrl() != null && web.getUrl().contains("/watch"));
         if (on("pip") && playing && watching) {
             gear.setVisibility(View.GONE); // some da janelinha antes de a transição começar
+            qcBar.setVisibility(View.GONE);
             try {
                 enterPictureInPictureMode(new PictureInPictureParams.Builder()
                         .setAspectRatio(new Rational(16, 9)).build());
@@ -388,6 +410,7 @@ public class MainActivity extends Activity {
         gear.setVisibility(inPip || customView != null || pseudoFs ? View.GONE : View.VISIBLE);
         swipe.setEnabled(!inPip && !pseudoFs);
         if (miniBox != null) miniBox.setVisibility(inPip ? View.GONE : View.VISIBLE);
+        if (inPip) qcBar.setVisibility(View.GONE);
         if (inPip) {
             // o vídeo ocupa a janelinha toda (mesmo método da tela cheia própria, sem controles)
             web.evaluateJavascript("window.__gtGuard=true;window.__gtFS&&window.__gtFS(true,true)", null);
@@ -428,6 +451,7 @@ public class MainActivity extends Activity {
         gear.setVisibility(View.GONE);
         swipe.setEnabled(false);
         goImmersive(true);
+        showQc();
     }
 
     private void exitPseudoFs() {
@@ -473,6 +497,134 @@ public class MainActivity extends Activity {
     private void defaultBack() {
         if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
+    }
+
+    // ---------- atalhos rápidos (menus nativos) ----------
+    @Override public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) showQc();
+        return super.dispatchTouchEvent(ev);
+    }
+
+    private TextView qcChip(String text, View.OnClickListener l) {
+        float d = getResources().getDisplayMetrics().density;
+        TextView c = new TextView(this);
+        c.setText(text);
+        c.setTextColor(Color.WHITE);
+        c.setTextSize(13);
+        c.setTypeface(null, android.graphics.Typeface.BOLD);
+        c.setPadding((int) (12 * d), (int) (7 * d), (int) (12 * d), (int) (7 * d));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(16 * d);
+        bg.setColor(0xB3000000);
+        c.setBackground(bg);
+        c.setOnClickListener(l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(0, 0, (int) (6 * d), 0);
+        c.setLayoutParams(lp);
+        return c;
+    }
+
+    /** Mostra os atalhos por alguns segundos (a cada toque na tela de vídeo / tela cheia). */
+    private void showQc() {
+        if (qcBar == null || !on("qc") || isInPictureInPictureMode()) return;
+        if (!(watching() || customView != null) || miniWeb != null) return;
+        web.evaluateJavascript("window.__gtQcState&&window.__gtQcState()", v -> {
+            try {
+                Object o = new JSONTokener(v == null ? "\"\"" : v).nextValue();
+                if (o instanceof String) {
+                    JSONObject j = new JSONObject((String) o);
+                    if (j.has("q")) qcQ.setText(j.getString("q"));
+                    if (j.has("s")) qcS.setText(j.get("s") + "x");
+                }
+            } catch (Exception ignored) {}
+        });
+        qcBar.setVisibility(View.VISIBLE);
+        qcBar.bringToFront();
+        qcBar.removeCallbacks(qcHide);
+        qcBar.postDelayed(qcHide, 3500);
+    }
+
+    private void qcDialog(String title, String[] names, int sel, final java.util.function.IntConsumer cb) {
+        qcBar.removeCallbacks(qcHide);
+        new AlertDialog.Builder(this).setTitle(title)
+                .setSingleChoiceItems(names, sel, (dlg, i) -> { dlg.dismiss(); cb.accept(i); })
+                .setOnDismissListener(dlg -> {
+                    if (pseudoFs || customView != null) goImmersive(true);
+                    showQc();
+                })
+                .show();
+    }
+
+    private static Object parseJs(String v) {
+        try { return new JSONTokener(v == null ? "\"\"" : v).nextValue(); } catch (Exception e) { return null; }
+    }
+
+    private void qcSpeed() {
+        web.evaluateJavascript("(function(){var v=document.querySelector('video');return v?v.playbackRate:1})()", val -> {
+            float cur = 1f;
+            try { cur = Float.parseFloat(val); } catch (Exception ignored) {}
+            final float[] vals = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
+            final String[] names = {"0.5x", "0.75x", "Normal (1x)", "1.25x", "1.5x", "1.75x", "2x"};
+            int sel = -1;
+            for (int i = 0; i < vals.length; i++) if (Math.abs(vals[i] - cur) < 0.01f) sel = i;
+            qcDialog("Velocidade", names, sel,
+                    i -> web.evaluateJavascript("window.__gtSetSpeed&&window.__gtSetSpeed(" + vals[i] + ")", null));
+        });
+    }
+
+    private void qcQuality() {
+        web.evaluateJavascript("window.__gtQcQuality&&window.__gtQcQuality()", val -> {
+            try {
+                Object o = parseJs(val);
+                JSONObject j = new JSONObject((String) o);
+                JSONArray lv = j.getJSONArray("levels");
+                if (lv.length() == 0) throw new Exception("vazio");
+                final String cur = j.optString("cur");
+                final String[] ids = new String[lv.length() + 1];
+                final String[] names = new String[lv.length() + 1];
+                ids[0] = "auto"; names[0] = "Auto";
+                int sel = -1;
+                for (int i = 0; i < lv.length(); i++) {
+                    ids[i + 1] = lv.getJSONArray(i).getString(0);
+                    names[i + 1] = lv.getJSONArray(i).getString(1);
+                    if (ids[i + 1].equals(cur)) sel = i + 1;
+                }
+                qcDialog("Qualidade", names, sel, i -> {
+                    web.evaluateJavascript("window.__gtSetQ&&window.__gtSetQ(" + JSONObject.quote(ids[i]) + ")", null);
+                    web.postDelayed(this::showQc, 1200);
+                });
+            } catch (Exception e) {
+                Toast.makeText(this, "Qualidade indisponível neste vídeo", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void qcCaptions() {
+        web.evaluateJavascript("window.__gtCapPrep&&window.__gtCapPrep()", null);
+        web.postDelayed(() -> web.evaluateJavascript("window.__gtCapList&&window.__gtCapList()", val -> {
+            try {
+                JSONObject j = new JSONObject((String) parseJs(val));
+                JSONArray tr = j.getJSONArray("tracks");
+                if (tr.length() == 0) throw new Exception("sem faixas");
+                final String cur = j.optString("cur");
+                final String[] codes = new String[tr.length() + 1];
+                final String[] names = new String[tr.length() + 1];
+                codes[0] = ""; names[0] = "Desativadas";
+                int sel = cur.isEmpty() ? 0 : -1;
+                for (int i = 0; i < tr.length(); i++) {
+                    codes[i + 1] = tr.getJSONArray(i).getString(0);
+                    names[i + 1] = tr.getJSONArray(i).getString(1);
+                    if (codes[i + 1].equals(cur)) sel = i + 1;
+                }
+                qcDialog("Legendas", names, sel,
+                        i -> web.evaluateJavascript("window.__gtSetCap&&window.__gtSetCap(" + JSONObject.quote(codes[i]) + ")", null));
+            } catch (Exception e) {
+                // plano B: aperta o botão de legendas do próprio YouTube
+                web.evaluateJavascript("window.__gtCapNative&&window.__gtCapNative()", r -> {
+                    if (!"true".equals(r)) Toast.makeText(this, "Sem legendas neste vídeo", Toast.LENGTH_SHORT).show();
+                });
+            }
+        }), 350);
     }
 
     // ---------- mini player dentro do app ----------
