@@ -9,7 +9,7 @@ android {
         targetSdk 34
         // sobe sozinho a cada build no GitHub Actions (o Android exige que nunca diminua)
         versionCode 100 + Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
-        versionName '1.4.1'
+        versionName '1.4.2'
     }
 
     // Assinatura FIXA: toda versão sai com a mesma chave, então atualiza por cima sem desinstalar.

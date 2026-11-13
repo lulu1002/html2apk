@@ -143,6 +143,7 @@ window.__gtPip=function(on){
 
 /* ---------- Tela cheia própria (ao girar o celular) ---------- */
 window.__gtFS=function(on,pip){
+  window.__gtFsOn=!!on&&!pip;
   var old=document.getElementById('gt-fs'); if(old) old.remove();
   var prev=document.querySelectorAll('.gt-fsanc');
   for(var i=0;i<prev.length;i++) prev[i].classList.remove('gt-fsanc');
@@ -174,6 +175,21 @@ try{
   var oc=function(e){ if(window.GT) GT.orient(e.matches); };
   if(mq.addEventListener) mq.addEventListener('change',oc); else mq.addListener(oc);
 }catch(e){}
+
+/* ---------- Engrenagem do player na tela cheia própria: abre o menu nativo do app ---------- */
+(function(){
+  var last=0;
+  function h(e){
+    if(!window.__gtFsOn||!window.GT||!GT.settings) return;
+    var t=e.target&&e.target.closest?e.target.closest(
+      'button[aria-label*="onfigura" i],button[aria-label*="ettings" i],[class*="settings-icon"],[class*="settings-button"]'):null;
+    if(!t) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    var now=Date.now();
+    if(now-last>600){ last=now; GT.settings(); }
+  }
+  ['touchend','pointerup','mouseup','click'].forEach(function(n){ document.addEventListener(n,h,true); });
+})();
 
 /* ---------- Mini player (WebView secundária do app): só o vídeo, sem controles ---------- */
 if(window.__gtMini){

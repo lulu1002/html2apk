@@ -220,6 +220,11 @@ public class MainActivity extends Activity {
             });
         }
 
+        @JavascriptInterface public void settings() {
+            if (mini) return;
+            runOnUiThread(() -> qcSettings());
+        }
+
         @JavascriptInterface public void orient(final boolean landscape) {
             if (mini) return;
             runOnUiThread(() -> handleOrientation(landscape));
@@ -557,6 +562,13 @@ public class MainActivity extends Activity {
 
     private static Object parseJs(String v) {
         try { return new JSONTokener(v == null ? "\"\"" : v).nextValue(); } catch (Exception e) { return null; }
+    }
+
+    /** Engrenagem do player na tela cheia automática: menu nativo com os mesmos atalhos. */
+    private void qcSettings() {
+        qcDialog("Configurações", new String[]{"Legendas", "Qualidade", "Velocidade"}, -1, i -> {
+            if (i == 0) qcCaptions(); else if (i == 1) qcQuality(); else qcSpeed();
+        });
     }
 
     private void qcSpeed() {
