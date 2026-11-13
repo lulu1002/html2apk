@@ -88,7 +88,8 @@ fun Root(onVideo: (Boolean) -> Unit) {
         io { channel = e.sub to withContext(Dispatchers.IO) { channelVideos(u) } }
     }
 
-    LaunchedEffect(Unit) { io { home = withContext(Dispatchers.IO) { trending() } } }
+    fun loadHome() = io { home = withContext(Dispatchers.IO) { homeFeed() } }
+    LaunchedEffect(Unit) { loadHome() }
     BackHandler(enabled = channel != null) { channel = null }
 
     // Pula automaticamente trechos de patrocínio/autopromoção (SponsorBlock)
@@ -110,7 +111,7 @@ fun Root(onVideo: (Boolean) -> Unit) {
         bottomBar = {
             NavigationBar {
                 listOf("🏠 Início", "🔍 Buscar", "📚 Biblioteca").forEachIndexed { i, t ->
-                    NavigationBarItem(selected = tab == i, onClick = { tab = i; channel = null },
+                    NavigationBarItem(selected = tab == i, onClick = { if (i == 0 && tab == 0) loadHome(); tab = i; channel = null },
                         icon = { Text(t.substringBefore(' ')) }, label = { Text(t.substringAfter(' ')) })
                 }
             }

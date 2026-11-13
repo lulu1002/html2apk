@@ -29,10 +29,17 @@ private val yt get() = ServiceList.YouTube
 fun toEntry(i: StreamInfoItem, music: Boolean = false) =
     Entry(i.name, i.uploaderName ?: "", i.url, i.thumbnails.firstOrNull()?.url, i.uploaderUrl, music)
 
-fun trending(): List<Entry> {
-    val k = yt.kioskList.defaultKioskExtractor
-    k.fetchPage()
-    return k.initialPage.items.filterIsInstance<StreamInfoItem>().map { toEntry(it) }
+/** O YouTube removeu a aba "Em alta", então o Início usa suas inscrições (ou uma busca). */
+fun homeFeed(): List<Entry> {
+    val subs = Store.list("subs")
+    if (subs.isNotEmpty()) {
+        val feed = subs.take(10).flatMap { s ->
+            try { channelVideos(s.url).take(5) } catch (e: Exception) { emptyList() }
+        }
+        if (feed.isNotEmpty()) return feed.shuffled()
+    }
+    val last = Store.list("hist").firstOrNull()?.sub?.takeIf { it.isNotBlank() }
+    return search(last ?: "vídeos populares", false)
 }
 
 fun search(q: String, music: Boolean): List<Entry> {
