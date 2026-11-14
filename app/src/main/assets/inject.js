@@ -116,7 +116,8 @@ function fixTop(){
   }catch(e){}
 }
 function updateTop(){
-  if(!cfg.notop||window.__gtMini) return;
+  if(window.__gtMini) return;
+  if(!cfg.notop){ document.documentElement.classList.remove('gt-notop'); return; }
   var rt=document.documentElement,w=location.pathname==='/watch',on=rt.classList.contains('gt-notop');
   if(w&&!on){
     var tb=document.querySelector('ytm-mobile-topbar-renderer');

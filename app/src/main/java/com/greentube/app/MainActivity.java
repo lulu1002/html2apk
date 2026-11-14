@@ -170,15 +170,38 @@ public class MainActivity extends Activity {
                 .setTitle("DevTube")
                 .setMultiChoiceItems(names, st, (d, i, c) -> st[i] = c)
                 .setPositiveButton("Salvar", (d, w) -> {
+                    boolean reload = false;
                     SharedPreferences.Editor e = prefs.edit();
-                    for (int i = 0; i < keys.length; i++) e.putBoolean(keys[i], st[i]);
+                    for (int i = 0; i < keys.length; i++) {
+                        String k = keys[i];
+                        // só estas mexem no que a página carrega; as outras valem na hora, sem recarregar
+                        if (on(k) != st[i] && (k.equals("ads") || k.equals("shorts") || k.equals("sb") || k.equals("dis"))) reload = true;
+                        e.putBoolean(k, st[i]);
+                    }
                     e.apply();
                     registerScript();
-                    web.reload();
+                    web.evaluateJavascript("if(window.__gtCfg){window.__gtCfg.notop=" + on("notop")
+                            + ";window.__gtCfg.dtap=" + on("dtap") + ";window.__gtCfg.qc=" + on("qc") + ";}", null);
+                    if (!on("qc")) qcBar.setVisibility(View.GONE);
+                    if (reload) reloadKeepingPosition();
                 })
                 .setNeutralButton("Mais…", (d, w) -> showMore())
                 .setNegativeButton("Cancelar", null)
                 .show();
+    }
+
+    /** Recarrega a página voltando pro mesmo segundo do vídeo (em vez de começar do zero). */
+    private void reloadKeepingPosition() {
+        if (!watching()) { web.reload(); return; }
+        web.evaluateJavascript("(function(){var v=document.querySelector('video');"
+                + "return JSON.stringify([location.href,v?Math.floor(v.currentTime||0):0]);})()", value -> {
+            try {
+                JSONArray a = new JSONArray((String) parseJs(value));
+                web.loadUrl(withTime(a.getString(0), a.getInt(1)));
+            } catch (Exception e) {
+                web.reload();
+            }
+        });
     }
 
     private void showSpeed() {
@@ -603,6 +626,15 @@ public class MainActivity extends Activity {
         swipe.setColorSchemeColors(a != 0 ? a : Color.RED);
     }
 
+    private static final int MINI_VW = 640, MINI_VH = 360;
+
+    private void applyMiniScale() {
+        if (miniWeb == null) return;
+        float s = (float) miniDp()[0] / MINI_VW;
+        miniWeb.setScaleX(s);
+        miniWeb.setScaleY(s);
+    }
+
     private void resizeMini() {
         if (miniBox == null) return;
         float d = getResources().getDisplayMetrics().density;
@@ -611,6 +643,7 @@ public class MainActivity extends Activity {
         lp.width = (int) (m[0] * d);
         lp.height = (int) (m[1] * d);
         miniBox.setLayoutParams(lp);
+        applyMiniScale();
     }
 
     private void applyAppearance() {
@@ -960,7 +993,14 @@ public class MainActivity extends Activity {
             @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), r); }
         });
         box.setClipToOutline(true);
-        box.addView(mw, new FrameLayout.LayoutParams(-1, -1));
+        // A página carrega num tamanho "normal" (640x360 dp) e é só reduzida por fora (escala),
+        // em vez de ser espremida numa janelinha: o layout do site não quebra.
+        FrameLayout.LayoutParams wl = new FrameLayout.LayoutParams(
+                (int) (MINI_VW * d), (int) (MINI_VH * d), Gravity.TOP | Gravity.START);
+        mw.setPivotX(0);
+        mw.setPivotY(0);
+        box.addView(mw, wl);
+        applyMiniScale();
 
         // toque no mini player = maximiza
         View tap = new View(this);
