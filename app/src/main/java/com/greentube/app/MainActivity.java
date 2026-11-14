@@ -143,6 +143,8 @@ public class MainActivity extends Activity {
         return (mini ? "window.__gtMini=true;" : "")
                 + "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
                 + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop") + ",qc:" + on("qc") + ",dtap:" + on("dtap") + ",cap:" + capJson() + ",accent:" + JSONObject.quote(prefs.getString("accent", ""))
+                + ",capPref:" + JSONObject.quote(prefs.getString("cap_pref", ""))
+                + ",audPref:" + JSONObject.quote(prefs.getString("aud_pref", ""))
                 + ",speed:" + prefs.getFloat("speed", 1f) + "};";
     }
 
@@ -719,11 +721,12 @@ public class MainActivity extends Activity {
     }
 
     private void showMore() {
-        qcDialog("Mais", new String[]{"Velocidade padrão", "Aparência", "Estilo da legenda", "Timer de sono"}, -1, i -> {
+        qcDialog("Mais", new String[]{"Velocidade padrão", "Aparência", "Estilo da legenda", "Timer de sono", "Idioma preferido"}, -1, i -> {
             if (i == 0) showSpeed();
             else if (i == 1) showAppearance();
             else if (i == 2) showCapStyle();
-            else qcSleep();
+            else if (i == 3) qcSleep();
+            else showLang();
         });
     }
 
@@ -765,13 +768,14 @@ public class MainActivity extends Activity {
 
     /** Engrenagem do player na tela cheia automática: menu nativo com os mesmos atalhos. */
     private void qcSettings() {
-        qcDialog("Mais opções", new String[]{"Legendas", "Qualidade", "Velocidade", "Estilo da legenda", "Timer de sono", "Aparência"}, -1, i -> {
+        qcDialog("Mais opções", new String[]{"Legendas", "Qualidade", "Velocidade", "Estilo da legenda", "Timer de sono", "Aparência", "Idioma preferido"}, -1, i -> {
             if (i == 0) qcCaptions();
             else if (i == 1) qcQuality();
             else if (i == 2) qcSpeed();
             else if (i == 3) showCapStyle();
             else if (i == 4) qcSleep();
-            else showAppearance();
+            else if (i == 5) showAppearance();
+            else showLang();
         });
     }
 
@@ -892,6 +896,23 @@ public class MainActivity extends Activity {
         });
     }
 
+    private static String base(String s) { return s == null ? "" : s.toLowerCase().split("[-_]")[0]; }
+
+    private static String langName(String c) {
+        switch (base(c)) {
+            case "pt": return "Português";
+            case "en": return "Inglês";
+            case "es": return "Espanhol";
+            case "ja": return "Japonês";
+            default: return c;
+        }
+    }
+
+    private void saveCapPref(String v) {
+        prefs.edit().putString("cap_pref", v).apply();
+        web.evaluateJavascript("window.__gtCfg&&(window.__gtCfg.capPref=" + JSONObject.quote(v) + ")", null);
+    }
+
     private void qcCaptions() {
         web.evaluateJavascript("window.__gtCapPrep&&window.__gtCapPrep()", null);
         web.postDelayed(() -> web.evaluateJavascript("window.__gtCapList&&window.__gtCapList()", val -> {
@@ -900,19 +921,41 @@ public class MainActivity extends Activity {
                 JSONArray tr = j.getJSONArray("tracks");
                 if (tr.length() == 0) throw new Exception("sem faixas");
                 final String cur = j.optString("cur");
-                final String[] codes = new String[tr.length() + 2];
-                final String[] names = new String[tr.length() + 2];
-                codes[0] = ""; names[0] = "Desativadas";
-                codes[tr.length() + 1] = ""; names[tr.length() + 1] = "Estilo da legenda…";
-                int sel = cur.isEmpty() ? 0 : -1;
-                for (int i = 0; i < tr.length(); i++) {
-                    codes[i + 1] = tr.getJSONArray(i).getString(0);
-                    names[i + 1] = tr.getJSONArray(i).getString(1);
-                    if (codes[i + 1].equals(cur)) sel = i + 1;
+                final String trCode = j.optString("tr");
+                String pf = prefs.getString("cap_pref", "");
+                final String top = (pf.isEmpty() || pf.equals("off")) ? "pt" : pf;   // português sempre no topo por padrão
+                final java.util.ArrayList<String> codes = new java.util.ArrayList<>();
+                final java.util.ArrayList<String> names = new java.util.ArrayList<>();
+                codes.add(""); names.add("Desativadas");
+                boolean hasTop = false;
+                for (int k = 0; k < tr.length(); k++) if (base(tr.getJSONArray(k).getString(0)).equals(base(top))) hasTop = true;
+                if (!hasTop && !trCode.isEmpty()) {
+                    codes.add("tr:" + base(top));
+                    names.add(langName(top) + " (tradução automática)");
                 }
-                qcDialog("Legendas", names, sel, i -> {
-                    if (i == names.length - 1) showCapStyle();
-                    else web.evaluateJavascript("window.__gtSetCap&&window.__gtSetCap(" + JSONObject.quote(codes[i]) + ")", null);
+                for (int pass = 0; pass < 2; pass++) {
+                    for (int k = 0; k < tr.length(); k++) {
+                        String code = tr.getJSONArray(k).getString(0);
+                        boolean m = base(code).equals(base(top));
+                        if ((pass == 0) == m) { codes.add(code); names.add(tr.getJSONArray(k).getString(1)); }
+                    }
+                }
+                final int sel = cur.isEmpty() ? 0 : codes.indexOf(cur);
+                codes.add(""); names.add("Estilo da legenda…");
+                final int styleIdx = names.size() - 1;
+                qcDialog("Legendas", names.toArray(new String[0]), sel, i -> {
+                    if (i == styleIdx) { showCapStyle(); return; }
+                    String c = codes.get(i);
+                    if (c.isEmpty()) {
+                        web.evaluateJavascript("window.__gtSetCap&&window.__gtSetCap('')", null);
+                    } else if (c.startsWith("tr:")) {
+                        String lg = c.substring(3);
+                        saveCapPref(lg);   // a escolha fica salva e vale nos próximos vídeos
+                        web.evaluateJavascript("window.__gtSetCapTr&&window.__gtSetCapTr(" + JSONObject.quote(lg) + ")", null);
+                    } else {
+                        saveCapPref(c);
+                        web.evaluateJavascript("window.__gtSetCap&&window.__gtSetCap(" + JSONObject.quote(c) + ")", null);
+                    }
                 });
             } catch (Exception e) {
                 // plano B: aperta o botão de legendas do próprio YouTube
@@ -921,6 +964,32 @@ public class MainActivity extends Activity {
                 });
             }
         }), 350);
+    }
+
+    // ---------- idioma preferido (legendas e áudio) ----------
+    private void applyLang() {
+        web.evaluateJavascript("if(window.__gtCfg){window.__gtCfg.capPref=" + JSONObject.quote(prefs.getString("cap_pref", ""))
+                + ";window.__gtCfg.audPref=" + JSONObject.quote(prefs.getString("aud_pref", ""))
+                + ";}window.__gtAutoLangNow&&window.__gtAutoLangNow(300)", null);
+    }
+
+    private void showLang() {
+        final String[] capV = {"", "pt", "en", "es", "off"};
+        final String[] capN = {"Padrão do YouTube", "Português", "Inglês", "Espanhol", "Sempre desligadas"};
+        final String[] audV = {"", "pt"};
+        final String[] audN = {"Padrão (original)", "Português (se houver dublagem)"};
+        final int ci = idx(capV, prefs.getString("cap_pref", ""));
+        final int ai = idx(audV, prefs.getString("aud_pref", ""));
+        String[] menu = {"Legendas: " + capN[ci], "Áudio: " + audN[ai]};
+        qcBar.removeCallbacks(qcHide);
+        new AlertDialog.Builder(this).setTitle("Idioma preferido")
+                .setItems(menu, (dlg, i) -> {
+                    if (i == 0) qcDialog("Legendas automáticas", capN, ci, k -> { prefs.edit().putString("cap_pref", capV[k]).apply(); applyLang(); showLang(); });
+                    else qcDialog("Idioma do áudio", audN, ai, k -> { prefs.edit().putString("aud_pref", audV[k]).apply(); applyLang(); showLang(); });
+                })
+                .setNegativeButton("Concluído", null)
+                .setOnDismissListener(dlg -> { if (pseudoFs || customView != null) goImmersive(true); })
+                .show();
     }
 
     // ---------- mini player dentro do app ----------
