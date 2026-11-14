@@ -1,6 +1,6 @@
 (function(){
 if(window.__gt)return;window.__gt=1;
-var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,notop:true,qc:true,dtap:true,cap:{size:100},accent:'',capPref:'',audPref:'',speed:1};
+var cfg=window.__gtCfg||{ads:true,shorts:true,sb:true,dis:true,notop:true,qc:true,dtap:true,cap:{size:100},accent:'',capPref:'',audPref:'',keep:true,bar:true,speed:1};
 
 /* Mantém a página "visível": o vídeo não pausa em segundo plano */
 try{
@@ -251,6 +251,44 @@ function autoLang(d){
   },d||1800);
 }
 window.__gtAutoLangNow=autoLang;
+
+/* ---------- Barra de navegação de baixo (Início / Shorts / Inscrições) ---------- */
+window.__gtBar=function(on){
+  try{
+    var st=document.getElementById('gt-nobar');
+    if(on){ if(st) st.remove(); return; }
+    if(!st){
+      st=document.createElement('style'); st.id='gt-nobar';
+      st.textContent='ytm-pivot-bar-renderer{display:none!important}';
+      (document.head||document.documentElement).appendChild(st);
+    }
+  }catch(e){}
+};
+window.__gtBar(cfg.bar);
+
+/* ---------- Abrir vídeo numa camada nova: a página de origem fica guardada, intacta ---------- */
+(function(){
+  function vurl(a){
+    try{
+      var u=new URL(a.href,location.href);
+      if(!/(^|\.)youtube\.com$/.test(u.hostname)) return null;
+      if(u.pathname==='/watch'&&u.searchParams.get('v')) return u.href;
+      var m=u.pathname.match(/^\/shorts\/([A-Za-z0-9_-]{11})/);
+      if(m) return 'https://m.youtube.com/watch?v='+m[1];
+    }catch(e){}
+    return null;
+  }
+  document.addEventListener('click',function(e){
+    if(!cfg.keep||window.__gtMini||!window.GT||!GT.openWatch) return;
+    if(location.pathname==='/watch') return;            /* dentro do vídeo a navegação segue normal */
+    if(e.defaultPrevented||e.button>0||e.ctrlKey||e.metaKey||e.shiftKey) return;
+    var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;
+    if(!a) return;
+    var u=vurl(a); if(!u) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    GT.openWatch(u);
+  },true);
+})();
 
 /* ---------- Loop do vídeo atual ---------- */
 window.__gtToggleLoop=function(){

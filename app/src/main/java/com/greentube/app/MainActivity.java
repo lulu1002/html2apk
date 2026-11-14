@@ -72,7 +72,10 @@ public class MainActivity extends Activity {
 
     static MainActivity instance;
 
-    private WebView web;
+    private WebView web;                 // camada ATIVA (a que está visível)
+    private WebView browseWeb;           // camada de navegação (início, busca, canal...)
+    private WebView watchWeb;            // camada do vídeo (criada ao abrir um vídeo)
+    private ScriptHandler watchHandler;
     private SwipeRefreshLayout swipe;
     private FrameLayout root;
     private ImageButton gear;
@@ -110,7 +113,7 @@ public class MainActivity extends Activity {
     static void jsOn(final WebView w, final String code) {
         final MainActivity a = instance;
         if (a == null || w == null) return;
-        a.runOnUiThread(() -> { if (w == a.web || w == a.miniWeb) w.evaluateJavascript(code, null); });
+        a.runOnUiThread(() -> { if (w == a.web || w == a.browseWeb || w == a.watchWeb || w == a.miniWeb) w.evaluateJavascript(code, null); });
     }
 
     private static boolean isAd(Uri u) {
@@ -142,20 +145,31 @@ public class MainActivity extends Activity {
     private String cfgJs(boolean mini) {
         return (mini ? "window.__gtMini=true;" : "")
                 + "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
-                + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop") + ",qc:" + on("qc") + ",dtap:" + on("dtap") + ",cap:" + capJson() + ",accent:" + JSONObject.quote(prefs.getString("accent", ""))
+                + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop") + ",qc:" + on("qc") + ",dtap:" + on("dtap") + ",keep:" + on("keep") + ",bar:" + on("bar") + ",cap:" + capJson() + ",accent:" + JSONObject.quote(prefs.getString("accent", ""))
                 + ",capPref:" + JSONObject.quote(prefs.getString("cap_pref", ""))
                 + ",audPref:" + JSONObject.quote(prefs.getString("aud_pref", ""))
                 + ",speed:" + prefs.getFloat("speed", 1f) + "};";
     }
 
     /** (Re)registra o script de início de documento com as configurações atuais. */
-    private void registerScript() {
-        script = cfgJs(false) + injectJs;
-        if (handler != null) { handler.remove(); handler = null; }
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            handler = WebViewCompat.addDocumentStartJavaScript(web, script,
+    private ScriptHandler addScript(WebView w, ScriptHandler old) {
+        if (old != null) old.remove();
+        if (w != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            return WebViewCompat.addDocumentStartJavaScript(w, script,
                     new HashSet<>(Arrays.asList("https://m.youtube.com", "https://www.youtube.com")));
         }
+        return null;
+    }
+
+    private void registerScript() {
+        script = cfgJs(false) + injectJs;
+        handler = addScript(browseWeb, handler);
+        if (watchWeb != null) watchHandler = addScript(watchWeb, watchHandler);
+    }
+
+    private void evalAll(String code) {
+        if (browseWeb != null) browseWeb.evaluateJavascript(code, null);
+        if (watchWeb != null) watchWeb.evaluateJavascript(code, null);
     }
 
     private void showSettings() {
@@ -164,8 +178,10 @@ public class MainActivity extends Activity {
                 "Tela cheia automática ao girar o celular",
                 "Esconder barra do topo (logo e lupa) no vídeo", "Mini player dentro do app ao voltar do vídeo",
                 "Atalhos rápidos no player (legendas, qualidade, velocidade)",
-                "Toque duplo na lateral do vídeo pula 10s"};
-        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs", "notop", "mini", "qc", "dtap"};
+                "Toque duplo na lateral do vídeo pula 10s",
+                "Guardar a página anterior ao abrir um vídeo (voltar sem recarregar)",
+                "Mostrar a barra de navegação de baixo (Início, Shorts, Inscrições)"};
+        final String[] keys = {"ads", "shorts", "sb", "dis", "pip", "autofs", "notop", "mini", "qc", "dtap", "keep", "bar"};
         final boolean[] st = new boolean[keys.length];
         for (int i = 0; i < keys.length; i++) st[i] = on(keys[i]);
         new AlertDialog.Builder(this)
@@ -183,10 +199,11 @@ public class MainActivity extends Activity {
                     e.apply();
                     registerScript();
                     updatePipParams();
-                    web.evaluateJavascript("if(window.__gtCfg){window.__gtCfg.notop=" + on("notop")
-                            + ";window.__gtCfg.dtap=" + on("dtap") + ";window.__gtCfg.qc=" + on("qc") + ";}", null);
+                    evalAll("if(window.__gtCfg){window.__gtCfg.notop=" + on("notop")
+                            + ";window.__gtCfg.dtap=" + on("dtap") + ";window.__gtCfg.qc=" + on("qc")
+                            + ";window.__gtCfg.keep=" + on("keep") + ";}window.__gtBar&&window.__gtBar(" + on("bar") + ")");
                     if (!on("qc")) qcBar.setVisibility(View.GONE);
-                    if (reload) reloadKeepingPosition();
+                    if (reload) { reloadKeepingPosition(); if (browseWeb != web) browseWeb.reload(); }
                 })
                 .setNeutralButton("Mais…", (d, w) -> showMore())
                 .setNegativeButton("Cancelar", null)
@@ -249,10 +266,13 @@ public class MainActivity extends Activity {
 
     private class Bridge {
         private final boolean mini;
-        Bridge(boolean mini) { this.mini = mini; }
+        private final WebView owner;   // a camada dona deste canal (null no mini player)
+        Bridge(boolean mini, WebView owner) { this.mini = mini; this.owner = owner; }
 
         @JavascriptInterface public void meta(final String title, final boolean pl) {
-            if (mini ? miniWeb == null : miniWeb != null) return; // só quem está "ativo" fala com a notificação
+            // só quem está "ativo" fala com a notificação
+            if (mini) { if (miniWeb == null) return; }
+            else if (miniWeb != null || (owner != null && owner != web)) return;
             playing = pl;
             runOnUiThread(() -> {
                 updatePipParams();
@@ -261,19 +281,31 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** Toque num vídeo na lista: abre numa camada nova e a página de origem fica intacta. */
+        @JavascriptInterface public void openWatch(final String url) {
+            if (mini || url == null) return;
+            runOnUiThread(() -> {
+                Uri u = Uri.parse(url);
+                String h = u.getHost() == null ? "" : u.getHost();
+                boolean ok = h.endsWith("youtube.com") && u.getPath() != null && u.getPath().startsWith("/watch");
+                if (ok && owner == browseWeb) showWatchLayer(url);
+                else if (owner != null) owner.loadUrl(url);
+            });
+        }
+
         @JavascriptInterface public void settings() {
-            if (mini) return;
+            if (mini || (owner != null && owner != web)) return;
             runOnUiThread(() -> qcSettings());
         }
 
         @JavascriptInterface public void orient(final boolean landscape) {
-            if (mini) return;
+            if (mini || (owner != null && owner != web)) return;
             runOnUiThread(() -> handleOrientation(landscape));
         }
 
         @JavascriptInterface public void sponsor(final String id) {
             if (id == null || !VID.matcher(id).matches()) return;
-            final WebView tw = mini ? miniWeb : web;
+            final WebView tw = mini ? miniWeb : (owner != null ? owner : web);
             new Thread(() -> {
                 try {
                     String url = "https://sponsor.ajay.app/api/skipSegments/" + sha256Prefix(id)
@@ -300,7 +332,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public void dislikes(final String id) {
             if (id == null || !VID.matcher(id).matches()) return;
-            final WebView tw = mini ? miniWeb : web;
+            final WebView tw = mini ? miniWeb : (owner != null ? owner : web);
             new Thread(() -> {
                 try {
                     String body = http("https://returnyoutubedislikeapi.com/votes?videoId=" + id);
@@ -322,13 +354,14 @@ public class MainActivity extends Activity {
 
         root = new FrameLayout(this);
         web = new WebView(this);
+        browseWeb = web;
         swipe = new SwipeRefreshLayout(this);
         swipe.addView(web, new ViewGroup.LayoutParams(-1, -1));
         swipe.setColorSchemeColors(Color.RED);
-        swipe.setOnRefreshListener(() -> web.reload());
+        swipe.setOnRefreshListener(() -> browseWeb.reload());
         // só puxa pra atualizar no topo e fora da página de vídeo (não atrapalha o gesto do player)
-        swipe.setOnChildScrollUpCallback((p, c) -> web.getScrollY() > 0
-                || (web.getUrl() != null && web.getUrl().contains("/watch")));
+        swipe.setOnChildScrollUpCallback((p, c) -> browseWeb.getScrollY() > 0
+                || (browseWeb.getUrl() != null && browseWeb.getUrl().contains("/watch")));
         root.addView(swipe, new FrameLayout.LayoutParams(-1, -1));
 
         float d = getResources().getDisplayMetrics().density;
@@ -345,6 +378,7 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px, px, Gravity.END | Gravity.CENTER_VERTICAL);
         lp.setMargins(0, 0, (int) (4 * d), 0);
         root.addView(gear, lp);
+        applyGearPos();
 
         qcBar = new LinearLayout(this);
         qcBar.setOrientation(LinearLayout.HORIZONTAL);
@@ -355,7 +389,21 @@ public class MainActivity extends Activity {
         applyAccentNative();
         setContentView(root);
 
-        WebSettings s = web.getSettings();
+        setupWeb(web);
+        registerScript();
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+        }
+        try { startForegroundService(new Intent(this, KeepAliveService.class)); } catch (Exception ignored) {}
+
+        Uri in = getIntent().getData();
+        web.loadUrl(in != null ? in.toString() : HOME);
+    }
+
+    // ---------- camadas de página (navegação x vídeo) ----------
+    private void setupWeb(WebView w) {
+        WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
@@ -363,15 +411,17 @@ public class MainActivity extends Activity {
         s.setUserAgentString(UA);
         s.setLoadWithOverviewMode(true);
         s.setSupportMultipleWindows(false);
-
+        s.setTextZoom(prefs.getInt("text_zoom", 100));
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
-        cm.setAcceptThirdPartyCookies(web, true); // necessário pro login Google manter a sessão
+        cm.setAcceptThirdPartyCookies(w, true); // necessário pro login Google manter a sessão
+        w.addJavascriptInterface(new Bridge(false, w), "GT");
+        w.setWebViewClient(makeClient());
+        w.setWebChromeClient(makeChrome());
+    }
 
-        web.addJavascriptInterface(new Bridge(false), "GT");
-        registerScript();
-
-        web.setWebViewClient(new WebViewClient() {
+    private WebViewClient makeClient() {
+        return new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 if (on("ads") && isAd(r.getUrl())) {
                     return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
@@ -401,14 +451,17 @@ public class MainActivity extends Activity {
                 v.evaluateJavascript(script, null);
                 swipe.setRefreshing(false);
             }
-        });
+        };
+    }
 
-        web.setWebChromeClient(new WebChromeClient() {
+    private WebChromeClient makeChrome() {
+        return new WebChromeClient() {
             @Override public void onShowCustomView(View view, CustomViewCallback cb) {
                 if (customView != null) { cb.onCustomViewHidden(); return; }
                 customView = view; customCb = cb;
                 if (pseudoFs) exitPseudoFs();
                 swipe.setVisibility(View.GONE);
+                if (watchWeb != null) watchWeb.setVisibility(View.GONE);
                 gear.setVisibility(View.GONE);
                 root.addView(view, new FrameLayout.LayoutParams(-1, -1));
                 qcBar.bringToFront();
@@ -417,15 +470,47 @@ public class MainActivity extends Activity {
                 updatePipParams();
             }
             @Override public void onHideCustomView() { exitFullscreen(); }
-        });
+        };
+    }
 
-        if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+    /** Mostra só a camada ativa; a outra fica guardada, intacta, só invisível. */
+    private void syncLayers() {
+        swipe.setVisibility(web == browseWeb ? View.VISIBLE : View.INVISIBLE);
+        if (watchWeb != null) watchWeb.setVisibility(web == watchWeb ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    private void showWatchLayer(String url) {
+        if (miniWeb != null) closeMini(true);
+        exitPseudoFs();
+        if (watchWeb == null) {
+            watchWeb = new WebView(this);
+            setupWeb(watchWeb);
+            watchHandler = addScript(watchWeb, null);
+            root.addView(watchWeb, 1, new FrameLayout.LayoutParams(-1, -1)); // acima da navegação, abaixo dos botões
         }
-        try { startForegroundService(new Intent(this, KeepAliveService.class)); } catch (Exception ignored) {}
+        web = watchWeb;
+        syncLayers();
+        watchWeb.loadUrl(url);
+        updatePipParams();
+    }
 
-        Uri in = getIntent().getData();
-        web.loadUrl(in != null ? in.toString() : HOME);
+    /** Fecha a camada do vídeo e volta pra página de navegação exatamente como estava. */
+    private void hideWatch() {
+        if (watchWeb == null) return;
+        exitPseudoFs();
+        WebView w = watchWeb;
+        watchWeb = null;
+        web = browseWeb;
+        if (watchHandler != null) { watchHandler.remove(); watchHandler = null; }
+        root.removeView(w);
+        try { w.loadUrl("about:blank"); } catch (Exception ignored) {}
+        w.destroy();
+        syncLayers();
+        if (miniWeb == null) {
+            playing = false;
+            if (KeepAliveService.instance != null) KeepAliveService.instance.update("DevTube", false);
+        }
+        updatePipParams();
     }
 
     @Override protected void onNewIntent(Intent i) {
@@ -543,7 +628,7 @@ public class MainActivity extends Activity {
         customView = null;
         updatePipParams();
         if (customCb != null) customCb.onCustomViewHidden();
-        swipe.setVisibility(View.VISIBLE);
+        syncLayers();
         gear.setVisibility(View.VISIBLE);
         goImmersive(false);
     }
@@ -569,6 +654,10 @@ public class MainActivity extends Activity {
     }
 
     private void defaultBack() {
+        if (watchWeb != null && web == watchWeb) {
+            if (watchWeb.canGoBack()) watchWeb.goBack(); else hideWatch();
+            return;
+        }
         if (web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }
@@ -579,15 +668,16 @@ public class MainActivity extends Activity {
         return super.dispatchTouchEvent(ev);
     }
 
+    private boolean onD(String k, boolean def) { return prefs.getBoolean(k, def); }
+
     private void buildQcChips() {
         qcBar.removeAllViews();
-        qcBar.addView(qcChip("CC", v -> qcCaptions()));
-        qcQ = qcChip("Qualidade", v -> qcQuality());
-        qcBar.addView(qcQ);
-        qcS = qcChip("1x", v -> qcSpeed());
-        qcBar.addView(qcS);
-        qcL = qcChip("\u21BB Loop", v -> qcLoop());
-        qcBar.addView(qcL);
+        qcQ = null; qcS = null; qcL = null;
+        if (onD("qc_cc", true)) qcBar.addView(qcChip("CC", v -> qcCaptions()));
+        if (onD("qc_q", true)) { qcQ = qcChip("Qualidade", v -> qcQuality()); qcBar.addView(qcQ); }
+        if (onD("qc_s", true)) { qcS = qcChip("1x", v -> qcSpeed()); qcBar.addView(qcS); }
+        if (onD("qc_l", true)) { qcL = qcChip("\u21BB Loop", v -> qcLoop()); qcBar.addView(qcL); }
+        if (onD("qc_t", false)) qcBar.addView(qcChip("Timer", v -> qcSleep()));
         qcBar.addView(qcChip("\u22EF", v -> qcSettings()));
     }
 
@@ -671,15 +761,66 @@ public class MainActivity extends Activity {
         applyMiniScale();
     }
 
+    private void applyGearPos() {
+        float d = getResources().getDisplayMetrics().density;
+        int px = (int) (38 * d);
+        String p = prefs.getString("gear_pos", "r");
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px, px);
+        if (p.equals("rt")) {
+            lp.gravity = Gravity.END | Gravity.TOP;
+            lp.setMargins(0, (int) (150 * d), (int) (4 * d), 0);
+        } else if (p.equals("rb")) {
+            lp.gravity = Gravity.END | Gravity.BOTTOM;
+            lp.setMargins(0, 0, (int) (4 * d), (int) (110 * d));
+        } else if (p.equals("l")) {
+            lp.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+            lp.setMargins((int) (4 * d), 0, 0, 0);
+        } else {
+            lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
+            lp.setMargins(0, 0, (int) (4 * d), 0);
+        }
+        gear.setLayoutParams(lp);
+        gear.setAlpha(prefs.getInt("gear_op", 55) / 100f);
+    }
+
+    private void applyTextZoom() {
+        int z = prefs.getInt("text_zoom", 100);
+        if (browseWeb != null) browseWeb.getSettings().setTextZoom(z);
+        if (watchWeb != null) watchWeb.getSettings().setTextZoom(z);
+    }
+
     private void applyAppearance() {
         applyQcPos();
         buildQcChips();
         resizeMini();
         applyAccentNative();
-        String code = "window.__gtAccent&&window.__gtAccent(" + JSONObject.quote(prefs.getString("accent", "")) + ")";
-        web.evaluateJavascript(code, null);
-        if (miniWeb != null) miniWeb.evaluateJavascript(code, null);
+        applyGearPos();
+        applyTextZoom();
+        evalAll("window.__gtAccent&&window.__gtAccent(" + JSONObject.quote(prefs.getString("accent", "")) + ")");
+        if (miniWeb != null) miniWeb.evaluateJavascript("window.__gtAccent&&window.__gtAccent(" + JSONObject.quote(prefs.getString("accent", "")) + ")", null);
         showQc();
+    }
+
+    private void showChips() {
+        final String[] names = {"Legendas (CC)", "Qualidade", "Velocidade", "Loop", "Timer de sono"};
+        final String[] keys = {"qc_cc", "qc_q", "qc_s", "qc_l", "qc_t"};
+        final boolean[] defs = {true, true, true, true, false};
+        final boolean[] st = new boolean[keys.length];
+        for (int i = 0; i < keys.length; i++) st[i] = onD(keys[i], defs[i]);
+        qcBar.removeCallbacks(qcHide);
+        new AlertDialog.Builder(this).setTitle("Atalhos visíveis")
+                .setMultiChoiceItems(names, st, (dlg, i, c) -> st[i] = c)
+                .setPositiveButton("Salvar", (dlg, w) -> {
+                    SharedPreferences.Editor e = prefs.edit();
+                    for (int i = 0; i < keys.length; i++) e.putBoolean(keys[i], st[i]);
+                    e.apply();
+                    buildQcChips();
+                    showQc();
+                    showAppearance();
+                })
+                .setNegativeButton("Cancelar", (dlg, w) -> showAppearance())
+                .setOnDismissListener(dlg -> { if (pseudoFs || customView != null) goImmersive(true); })
+                .show();
     }
 
     private void showAppearance() {
@@ -693,24 +834,41 @@ public class MainActivity extends Activity {
         final String[] opN = {"Bem transparente (30%)", "Transparente (50%)", "Normal (70%)", "Sólido (100%)"};
         final String[] szV = {"11", "13", "16"};
         final String[] szN = {"Pequeno", "Médio", "Grande"};
+        final String[] tzV = {"90", "100", "115", "130"};
+        final String[] tzN = {"Pequeno (90%)", "Normal (100%)", "Grande (115%)", "Muito grande (130%)"};
+        final String[] gpV = {"r", "rt", "rb", "l"};
+        final String[] gpN = {"Direita (meio)", "Direita (cima)", "Direita (baixo)", "Esquerda (meio)"};
+        final String[] goV = {"25", "55", "100"};
+        final String[] goN = {"Discreto (25%)", "Normal (55%)", "Sólido (100%)"};
         final int mi = idx(miniV, prefs.getString("mini_size", "m"));
         final int pi = idx(posV, prefs.getString("qc_pos", "tl"));
         final int ai = idx(accV, prefs.getString("accent", ""));
         final int oi = idx(opV, String.valueOf(prefs.getInt("qc_op", 70)));
         final int zi = idx(szV, String.valueOf(prefs.getInt("qc_size", 13)));
+        final int ti = idx(tzV, String.valueOf(prefs.getInt("text_zoom", 100)));
+        final int gi = idx(gpV, prefs.getString("gear_pos", "r"));
+        final int gj = idx(goV, String.valueOf(prefs.getInt("gear_op", 55)));
         String[] menu = {"Tamanho do mini player: " + miniN[mi], "Posição dos atalhos: " + posN[pi],
-                "Cor de destaque: " + accN[ai], "Opacidade dos botões: " + opN[oi], "Tamanho dos botões: " + szN[zi],
+                "Atalhos visíveis…", "Cor de destaque: " + accN[ai], "Opacidade dos botões: " + opN[oi],
+                "Tamanho dos botões: " + szN[zi], "Tamanho do texto da página: " + tzN[ti],
+                "Posição do botão de configurações: " + gpN[gi], "Opacidade do botão de configurações: " + goN[gj],
                 "Restaurar padrão"};
         qcBar.removeCallbacks(qcHide);
         new AlertDialog.Builder(this).setTitle("Aparência")
                 .setItems(menu, (dlg, i) -> {
                     if (i == 0) qcDialog("Tamanho do mini player", miniN, mi, k -> { prefs.edit().putString("mini_size", miniV[k]).apply(); applyAppearance(); showAppearance(); });
                     else if (i == 1) qcDialog("Posição dos atalhos", posN, pi, k -> { prefs.edit().putString("qc_pos", posV[k]).apply(); applyAppearance(); showAppearance(); });
-                    else if (i == 2) qcDialog("Cor de destaque", accN, ai, k -> { prefs.edit().putString("accent", accV[k]).apply(); applyAppearance(); showAppearance(); });
-                    else if (i == 3) qcDialog("Opacidade dos botões", opN, oi, k -> { prefs.edit().putInt("qc_op", Integer.parseInt(opV[k])).apply(); applyAppearance(); showAppearance(); });
-                    else if (i == 4) qcDialog("Tamanho dos botões", szN, zi, k -> { prefs.edit().putInt("qc_size", Integer.parseInt(szV[k])).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 2) showChips();
+                    else if (i == 3) qcDialog("Cor de destaque", accN, ai, k -> { prefs.edit().putString("accent", accV[k]).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 4) qcDialog("Opacidade dos botões", opN, oi, k -> { prefs.edit().putInt("qc_op", Integer.parseInt(opV[k])).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 5) qcDialog("Tamanho dos botões", szN, zi, k -> { prefs.edit().putInt("qc_size", Integer.parseInt(szV[k])).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 6) qcDialog("Tamanho do texto da página", tzN, ti, k -> { prefs.edit().putInt("text_zoom", Integer.parseInt(tzV[k])).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 7) qcDialog("Posição do botão de configurações", gpN, gi, k -> { prefs.edit().putString("gear_pos", gpV[k]).apply(); applyAppearance(); showAppearance(); });
+                    else if (i == 8) qcDialog("Opacidade do botão de configurações", goN, gj, k -> { prefs.edit().putInt("gear_op", Integer.parseInt(goV[k])).apply(); applyAppearance(); showAppearance(); });
                     else {
-                        prefs.edit().remove("mini_size").remove("qc_pos").remove("accent").remove("qc_op").remove("qc_size").apply();
+                        prefs.edit().remove("mini_size").remove("qc_pos").remove("accent").remove("qc_op").remove("qc_size")
+                                .remove("text_zoom").remove("gear_pos").remove("gear_op")
+                                .remove("qc_cc").remove("qc_q").remove("qc_s").remove("qc_l").remove("qc_t").apply();
                         applyAppearance();
                         showAppearance();
                     }
@@ -739,8 +897,8 @@ public class MainActivity extends Activity {
                 Object o = new JSONTokener(v == null ? "\"\"" : v).nextValue();
                 if (o instanceof String) {
                     JSONObject j = new JSONObject((String) o);
-                    if (j.has("q")) qcQ.setText(j.getString("q"));
-                    if (j.has("s")) qcS.setText(j.get("s") + "x");
+                    if (qcQ != null && j.has("q")) qcQ.setText(j.getString("q"));
+                    if (qcS != null && j.has("s")) qcS.setText(j.get("s") + "x");
                     if (j.has("l")) setLoopUi(j.getBoolean("l"));
                 }
             } catch (Exception ignored) {}
@@ -1008,6 +1166,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             if (pl && url != null && url.contains("/watch")) {
                 openMini(url, sec);
+                if (watchWeb != null && web == watchWeb) { hideWatch(); return; }  // a lista de onde veio fica intacta
                 String prev = previousUrl();
                 // sem página anterior (ou anterior também é vídeo): vai pra home, o mini continua tocando
                 if (prev == null || prev.contains("/watch")) web.loadUrl(HOME);
@@ -1056,7 +1215,7 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setUserAgentString(UA);
         CookieManager.getInstance().setAcceptThirdPartyCookies(mw, true);
-        mw.addJavascriptInterface(new Bridge(true), "GT");
+        mw.addJavascriptInterface(new Bridge(true, null), "GT");
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(mw, ms,
                     new HashSet<>(Arrays.asList("https://m.youtube.com", "https://www.youtube.com")));
@@ -1138,7 +1297,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             if (url == null) return;
             closeMini(false);
-            web.loadUrl(withTime(url, sec));
+            showWatchLayer(withTime(url, sec));
         });
     }
 
@@ -1166,8 +1325,9 @@ public class MainActivity extends Activity {
         closeMini(false);
         stopService(new Intent(this, KeepAliveService.class));
         CookieManager.getInstance().flush();
-        ((ViewGroup) web.getParent()).removeView(web);
-        web.destroy();
+        if (watchWeb != null) { root.removeView(watchWeb); watchWeb.destroy(); watchWeb = null; }
+        ((ViewGroup) browseWeb.getParent()).removeView(browseWeb);
+        browseWeb.destroy();
         super.onDestroy();
     }
 }
