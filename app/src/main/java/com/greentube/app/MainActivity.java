@@ -180,6 +180,7 @@ public class MainActivity extends Activity {
                     }
                     e.apply();
                     registerScript();
+                    updatePipParams();
                     web.evaluateJavascript("if(window.__gtCfg){window.__gtCfg.notop=" + on("notop")
                             + ";window.__gtCfg.dtap=" + on("dtap") + ";window.__gtCfg.qc=" + on("qc") + ";}", null);
                     if (!on("qc")) qcBar.setVisibility(View.GONE);
@@ -252,6 +253,7 @@ public class MainActivity extends Activity {
             if (mini ? miniWeb == null : miniWeb != null) return; // só quem está "ativo" fala com a notificação
             playing = pl;
             runOnUiThread(() -> {
+                updatePipParams();
                 if (KeepAliveService.instance != null)
                     KeepAliveService.instance.update(title == null ? "DevTube" : title, pl);
             });
@@ -389,6 +391,7 @@ public class MainActivity extends Activity {
             @Override public void doUpdateVisitedHistory(WebView v, String url, boolean isReload) {
                 if (miniWeb != null && url != null && url.contains("/watch")
                         && System.currentTimeMillis() > miniGraceUntil) closeMini(true);
+                updatePipParams();
             }
             // Reserva para WebViews sem suporte a script de início de documento.
             @Override public void onPageStarted(WebView v, String url, Bitmap f) { v.evaluateJavascript(script, null); }
@@ -409,6 +412,7 @@ public class MainActivity extends Activity {
                 qcBar.bringToFront();
                 goImmersive(true);
                 showQc();
+                updatePipParams();
             }
             @Override public void onHideCustomView() { exitFullscreen(); }
         });
@@ -441,6 +445,24 @@ public class MainActivity extends Activity {
                 if (!pseudoFs && customView == null) gear.setVisibility(View.VISIBLE);
             }
         }
+    }
+
+    private boolean pipEligible() {
+        return on("pip") && playing && miniWeb == null && (customView != null || watching());
+    }
+
+    /**
+     * Android 12+: com "entrada automática", o sistema abre o PiP sozinho em qualquer saída do app
+     * (Home, gesto, alternar entre apps). Só fica ligado enquanto um vídeo está tocando.
+     */
+    private void updatePipParams() {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            setPictureInPictureParams(new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9))
+                    .setAutoEnterEnabled(pipEligible())
+                    .build());
+        } catch (Exception ignored) {}
     }
 
     @Override public void onPictureInPictureModeChanged(boolean inPip, Configuration c) {
@@ -517,6 +539,7 @@ public class MainActivity extends Activity {
         if (customView == null) return;
         root.removeView(customView);
         customView = null;
+        updatePipParams();
         if (customCb != null) customCb.onCustomViewHidden();
         swipe.setVisibility(View.VISIBLE);
         gear.setVisibility(View.VISIBLE);
@@ -956,6 +979,7 @@ public class MainActivity extends Activity {
 
         final WebView mw = new WebView(this);
         miniWeb = mw;
+        updatePipParams();
         WebSettings s = mw.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -1054,6 +1078,7 @@ public class MainActivity extends Activity {
         WebView mw = miniWeb;
         FrameLayout box = miniBox;
         miniWeb = null; miniBox = null;
+        updatePipParams();
         if (box != null) { box.removeAllViews(); root.removeView(box); }
         try { mw.loadUrl("about:blank"); } catch (Exception ignored) {}
         mw.destroy();
@@ -1064,7 +1089,7 @@ public class MainActivity extends Activity {
     }
 
     // Propositalmente NÃO chamamos web.onPause(): assim o áudio segue tocando em segundo plano.
-    @Override protected void onResume() { super.onResume(); web.onResume(); if (miniWeb != null) miniWeb.onResume(); }
+    @Override protected void onResume() { super.onResume(); web.onResume(); if (miniWeb != null) miniWeb.onResume(); updatePipParams(); }
 
     @Override protected void onDestroy() {
         instance = null;
