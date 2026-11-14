@@ -144,11 +144,11 @@ public class MainActivity extends Activity {
 
     private String cfgJs(boolean mini) {
         return (mini ? "window.__gtMini=true;" : "")
-                + "window.__gtCfg={ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
+                + "window.__gtCfg=Object.assign(window.__gtCfg||{},{ads:" + on("ads") + ",shorts:" + on("shorts") + ",sb:" + on("sb")
                 + ",dis:" + (mini ? "false" : on("dis")) + ",notop:" + on("notop") + ",qc:" + on("qc") + ",dtap:" + on("dtap") + ",keep:" + on("keep") + ",bar:" + on("bar") + ",cap:" + capJson() + ",accent:" + JSONObject.quote(prefs.getString("accent", ""))
                 + ",capPref:" + JSONObject.quote(prefs.getString("cap_pref", ""))
                 + ",audPref:" + JSONObject.quote(prefs.getString("aud_pref", ""))
-                + ",speed:" + prefs.getFloat("speed", 1f) + "};";
+                + ",speed:" + prefs.getFloat("speed", 1f) + "});";
     }
 
     /** (Re)registra o script de início de documento com as configurações atuais. */
@@ -165,6 +165,12 @@ public class MainActivity extends Activity {
         script = cfgJs(false) + injectJs;
         handler = addScript(browseWeb, handler);
         if (watchWeb != null) watchHandler = addScript(watchWeb, watchHandler);
+    }
+
+    /** Reaplica TODAS as configurações salvas na página (objeto de config + estilos que dependem delas). */
+    private String syncJs() {
+        return cfgJs(false) + "window.__gtBar&&window.__gtBar(" + on("bar") + ");"
+                + "window.__gtAccent&&window.__gtAccent();window.__gtCapStyle&&window.__gtCapStyle();";
     }
 
     private void evalAll(String code) {
@@ -199,9 +205,7 @@ public class MainActivity extends Activity {
                     e.apply();
                     registerScript();
                     updatePipParams();
-                    evalAll("if(window.__gtCfg){window.__gtCfg.notop=" + on("notop")
-                            + ";window.__gtCfg.dtap=" + on("dtap") + ";window.__gtCfg.qc=" + on("qc")
-                            + ";window.__gtCfg.keep=" + on("keep") + ";}window.__gtBar&&window.__gtBar(" + on("bar") + ")");
+                    evalAll(syncJs());
                     if (!on("qc")) qcBar.setVisibility(View.GONE);
                     if (reload) { reloadKeepingPosition(); if (browseWeb != web) browseWeb.reload(); }
                 })
@@ -449,6 +453,7 @@ public class MainActivity extends Activity {
             @Override public void onPageStarted(WebView v, String url, Bitmap f) { v.evaluateJavascript(script, null); }
             @Override public void onPageFinished(WebView v, String url) {
                 v.evaluateJavascript(script, null);
+                v.evaluateJavascript(syncJs(), null);   // garante que o que está salvo está valendo nesta página
                 swipe.setRefreshing(false);
             }
         };

@@ -290,6 +290,11 @@ window.__gtBar(cfg.bar);
   },true);
 })();
 
+/* estilos que dependem da configuração: reaplica quando o documento existe de fato */
+document.addEventListener('DOMContentLoaded',function(){
+  try{ window.__gtBar(cfg.bar); window.__gtAccent(); window.__gtCapStyle(); }catch(e){}
+});
+
 /* ---------- Loop do vídeo atual ---------- */
 window.__gtToggleLoop=function(){
   var v=document.querySelector('video'); if(!v) return false;
